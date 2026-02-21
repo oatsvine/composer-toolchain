@@ -800,9 +800,6 @@ def flatten_voices_to_parts(score: Score) -> Score:
       TimeSignature, else default to 4/4.
     - This transform is idempotent: running it again produces an equivalent Score.
     """
-    # DONE: Compared against music21 `voicesToParts()` across the curated and stress corpora (see SCRATCHPAD). Built-in mutates part ids (appending `-v0`) and collapses
-    #       numbered part names, while this implementation preserves canonical ids/labels; bespoke path remains required to keep normalized naming stable.
-
     comment_clones = _clone_global_comments(score)
     out = Score()
     out.metadata = score.metadata

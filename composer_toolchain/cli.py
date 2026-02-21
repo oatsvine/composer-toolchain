@@ -17,7 +17,7 @@ from rich.table import Table
 from typing_extensions import Annotated
 
 from composer_toolchain.score import MeasureSpec, PartSpec, load_score, normalize
-from composer_toolchain.core import Context
+from composer_toolchain.core import Context, ScoreSpec
 
 console = Console()
 app = typer.Typer()
@@ -26,19 +26,34 @@ app = typer.Typer()
 def choose_score(
     src_dir: Path, filter_suffix: Set[str] = {".mxl", ".xml", ".krn"}
 ) -> Path:
-    """Prompt the user to select a score inside `src_dir`."""
+    """
+    Prompt the user to select a score inside `src_dir`.
+
+    This interractive chooser improves ergonomics in CLI workflows by quickly
+    letting the user pick scores or excerpts from workspace directories.
+
+    Using `sk` (skim) because it works but any fuzzy finder would do.
+    """
     scores = [p for p in src_dir.glob("*.*") if p.suffix in filter_suffix]
     if not scores:
         raise ValueError(f"No files with suffix {filter_suffix} in {src_dir}")
     choices = [candidate.name for candidate in scores]
-    result = subprocess.run(
-        ["sk"],
-        input="\n".join(choices),
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    try:
+        result = subprocess.run(
+            ["sk"],
+            input="\n".join(choices),
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            "sk executable not found; install sk to use interactive selection."
+        ) from exc
+
     filename = result.stdout.strip()
+    if not filename:
+        raise ValueError("No score selected.")
     score_file = src_dir / filename
     if not score_file.exists():
         raise FileNotFoundError(f"Selected file does not exist: {score_file}")
@@ -46,7 +61,7 @@ def choose_score(
 
 
 @app.command()
-def init_from_score(
+def init_with_score(
     score_file: Annotated[
         Optional[Path],
         typer.Option(
@@ -82,7 +97,7 @@ def init_from_score(
     selected = selected.resolve()
     if not selected.exists():
         raise typer.BadParameter(f"Score file not found: {selected}")
-    created = Context.init_from_score(score_file=selected, cwd=cwd)
+    created = Context.init_with_score(score_file=selected, cwd=cwd)
     console.print(f"[green]Workspace created[/green]: {created}")
     return created
 
@@ -152,14 +167,12 @@ def change_master(
     ] = None,
 ) -> None:
     """Promote a workspace score to master."""
-    scores_dir = work_dir / "scores"
-    if not scores_dir.exists():
-        raise typer.BadParameter(f"Workspace scores directory missing: {scores_dir}")
+    workspace = Context(work_dir=work_dir)
+    scores_dir = workspace.subdir("scores")
 
     if not filename:
         filename = choose_score(scores_dir, filter_suffix={".krn"}).name
 
-    workspace = Context(work_dir=work_dir)
     workspace.change_master(filename=filename)
     console.print(f"[green]Master changed[/green] → scores/{filename}")
 
@@ -275,20 +288,16 @@ def merge_excerpt(
     ] = None,
 ) -> None:
     """Merge a Humdrum excerpt (under excerpts/) back into the master."""
-    excerpts_dir = work_dir / "excerpts"
-    if not excerpts_dir.exists():
-        raise typer.BadParameter(f"No excerpts directory in workspace: {excerpts_dir}")
-
+    workspace = Context(work_dir=work_dir)
     candidate = (
-        choose_score(excerpts_dir, filter_suffix={".krn"})
+        choose_score(workspace.subdir(), filter_suffix={".krn"})
         if filename is None
-        else (filename if filename.is_absolute() else excerpts_dir / filename)
+        else (filename if filename.is_absolute() else workspace.subdir() / filename)
     )
     candidate = candidate.resolve()
     if not candidate.exists():
         raise typer.BadParameter(f"Excerpt file not found: {candidate}")
 
-    workspace = Context(work_dir=work_dir)
     workspace.merge_excerpt(filename=candidate.name)
     console.print(f"[green]Excerpt merged[/green]: {candidate.relative_to(work_dir)}")
 
@@ -403,8 +412,7 @@ def info(
         score_path = candidate
         score = normalize(load_score(score_path))
 
-    spec = client._build_spec(score)
-
+    spec = ScoreSpec.build(score)
     try:
         display_master = score_path.relative_to(work_dir)
     except ValueError:

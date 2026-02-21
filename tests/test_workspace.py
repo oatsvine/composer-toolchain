@@ -41,7 +41,7 @@ def _first_notated_span(score: Score) -> Tuple[str, int, str]:
 @pytest.fixture()
 def sample_workspace(tmp_path: Path) -> Context:
     assert SAMPLE_SCORE.exists(), f"Missing sample score: {SAMPLE_SCORE}"
-    work_dir = Context.init_from_score(
+    work_dir = Context.init_with_score(
         score_file=SAMPLE_SCORE,
         cwd=tmp_path,
     )
