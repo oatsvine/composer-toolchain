@@ -1,9 +1,3 @@
-[build-system]
-requires = [
-    "uv-build>=0.9.6,<0.10.0",
-]
-build-backend = "uv_build"
-
 [project]
 name = "composer-toolchain"
 version = "0.1.0"
@@ -34,21 +28,37 @@ dev = [
   "pytest",
   "pytest-asyncio",
   "pytest-datadir",
+  "basedpyright",
+  "ruff",
   "black",
-  "pyright",
 ]
 
+[project.scripts]
+media-reconcile = "composer_toolchain.cli:root_app"
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
+
 [tool.pyright]
-include = ["src", "tests"]
-exclude = ["**/node_modules", "**/__pycache__", "lib"]
-
-[tool.uv.pip]
-prerelease = "allow"
-
-# [tool.uv.extra-build-dependencies]
-# pkuseg = ["numpy"]
+pythonVersion = "3.12"
+include = ["src", "scripts"]
+typeCheckingMode = "standard"
+enableTypeIgnoreComments = false
+deprecateTypingAliases = false
+reportUnnecessaryTypeIgnoreComment = "error"
+strictListInference = true
+strictDictionaryInference = true
+strictSetInference = true
 
 [tool.pytest.ini_options]
 testpaths = [
     "tests",
 ]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["B009", "B010"]

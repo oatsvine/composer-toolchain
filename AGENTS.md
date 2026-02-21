@@ -1,29 +1,81 @@
-# Repository Guidelines
+## 0) Precedence & Interpretation
 
-## Project Structure & Module Organization
-- `src/composer_toolchain/` houses runtime code: `core.py` handles workspace orchestration, `score.py` exposes excerpt utilities, and `cli.py` provides the Typer interface surfaced via `python -m composer_toolchain.cli`.
-- `tests/` mirrors the module layout (e.g., `test_core.py`, `test_score_parts.py`) and should be extended alongside new functionality.
-- `tests/data/corpus/` stores sample Humdrum and MusicXML assets used in fixtures; avoid modifying originals—stage temporary derivatives under `/tmp` or a workspace copy.
+* `NOTE:` comments are **authoritative**. Obey them verbatim; do not remove.
+* `TODO:` comments are **authoritative and actionable**. They are authored by the user. Implement the specific gap and then remove the `TODO:` line. Do not create new `TODO:` lines as a substitute for implementation.
+* Follow existing file/project conventions first. When this doc and code comments conflict, **code comments win**. Your primary responsibility is to **match the current file’s patterns** (naming, logging, returns).
+* Canonical user code takes priority over docs; disambiguate your commits ("AI:" prefix) from user commits, anchor implementation cues in canonical user commits code.
+* `ARCHITECTURE.md` defines intended invariants; apply only when consistent with canonical code.
 
-## Build, Test, and Development Commands
-- `python -m pip install -e .[dev]` sets up the editable package with pytest/pyright tooling.
-- `pytest` runs the entire suite defined in `pyproject.toml` → `tool.pytest.ini_options`.
-- `pyright` performs static type analysis on `composer_toolchain` and `tests`.
-- `black composer_toolchain tests` enforces formatting; match the repo’s 88‑column default.
-- `python -m composer_toolchain.cli --help` lists workspace commands such as `init-with-score` and `export-midi` for manual verification.
+## Implementation constraints
 
-## Coding Style & Naming Conventions
-- Follow Black formatting (4-space indents, trailing commas, double quotes where practical) and keep modules import-sorted.
-- Favor typed function signatures and `pydantic` models for data contracts; prefer snake_case helpers and UpperCamelCase classes (see `ScoreSpec`, `PartInfo`).
-- Keep CLI options descriptive and use Typer’s `Annotated` metadata for validation.
-- Log with `loguru.logger` at info/debug levels instead of `print`.
+- Bespoke code minimalism: Challenge every line of code. If a line is not required for correctness, clarity, or measurable performance, **remove it**. Agents tend to over-abstract: resist helper sprawl, avoid “future-proofing,” and keep the API surface minimal.
+- Idiomatic-first: use the language/framework/library facilities directly.
+- Search-first: before creating any new helper, search for prior art and reuse or extract.
+- Helper skepticism: Assume every helper is illegal until **proven** to uphold the constraints in this document and the canonical code.
+- No thin wrappers: do not wrap a library call unless you enforce a domain invariant or combine a multi-step protocol used in ≥2 places.
+- No speculative generality: no config knobs, factories, or “flexible” abstractions unless explicitly requested.
+- Design lens: Functional core / imperative shell, and separation of concerns (CLI parsing ≠ business logic ≠ I/O).
 
-## Testing Guidelines
-- Add pytest modules alongside the feature under test (e.g., `src/composer_toolchain/core.py` → `tests/test_core.py`).
-- Use descriptive test names like `test_merge_keeps_time_signatures` and rely on fixtures in `tests/conftest.py` for corpus paths.
-- Run `pytest -k <focus>` during iteration, then full `pytest` + `pyright` before opening a PR; fail fast on coverage gaps around score mutations and workspace side effects.
+## Anti Code Smells Rules (Canonical)
 
-## Commit & Pull Request Guidelines
-- Commits follow short, imperative summaries (`Housekeeping in workspace directories`, `Round of cleanup`). Keep related changes squashed and note affected modules in the body if needed.
-- PRs should link issues, describe workspace/test steps, and include CLI transcripts or MIDI diffs when behavior changes. Screenshot/score excerpts are encouraged for UI- or notation-facing adjustments.
-- Ensure CI-critical commands (`pytest`, `pyright`, `black --check`) pass locally before requesting review.
+### Hard bans
+
+* Never use `cast(...)`.
+* Never use `getattr(...)`, `setattr(...)`, or `hasattr(...)`.
+* Never use `# type: ignore`; use `# pyright: ignore[rule]` only under approved exception protocol.
+
+### Compatibility Exception (approval-required)
+
+* Applicable only to vendor libraries already in the stack (if any)
+* Exception-only area: isolate interop in one narrowly scoped adapter function/module so type compromises do not spread.
+* Docstring marker required on that isolated function:
+  - `COMPAT(<library>, <version>): <constraint>.`
+  - Ask user to review and approve
+* Ignore rule notation allowed only inside approved exception blocks:
+  - `# pyright: ignore[reportArgumentType]`
+  - The scope of compat functions is THE ONLY EXCEPTION to ignore ban.
+
+### Search-first error workflow (mandatory)
+
+**Search-first means always proactively find the canonical syntax pattern**
+
+1. Reproduce the error locally (`pyright`, CLI command, or REPL snippet).
+2. Navigate to library source and type signatures first (installed package source, stubs, and official docs).
+3. Use the library idiomatically in user code without dynamic bypasses.
+4. If blocked by third-party typing defects, propose a scoped exception to the user before writing ignores.
+
+### Enforcement stack
+
+* Baseline: `pyright`.
+* Required stricter companion: `basedpyright --project basedpyrightconfig.json` with `reportInvalidCast`, `reportAny`, `reportExplicitAny`, and `reportIgnoreCommentWithoutRule`.
+* Required smell lint: `ruff` with flake8-bugbear rules `B009`/`B010` to catch dynamic attribute access patterns (`getattr`/`setattr` with constant attribute names).
+
+## Repository expectations
+
+* Use `tree` to get oriented.
+* Use appropriate search or package manager CLI for more details.
+* Explore `references/` for applicable curated corpus. 
+
+### UV + pytest conventions
+- Check `printenv UV_SYSTEM_PYTHON`, if set, you are in the deterministic container, assume all dependencies and editable project preinstalled.
+- Keep pytest configuration in `pyproject.toml` using canonical "src/" layout.
+- Do not add uv-only fields outside the documented schema; prefer `python -m` for execution the container.
+
+## Build, Test, and Dev
+
+* Run: `python -m media_reconcile.cli --help` (explore subcommands and their usage as required) 
+* Type check: `pyright`
+* Companion type check: `basedpyright --project basedpyrightconfig.json`
+* Smell lint: `ruff check .`
+* Format: `black .`
+* Library usage rules: navigate to definition to study usage then use your python REPL to test and inspect before designing and writing code. 
+
+## Style & Naming
+
+* Python ≥ 3.12. **Strict typing everywhere** (no untyped public functions).
+* Project typing convention: use `typing` generics (`List`, `Dict`, `Tuple`, `Set`, `Optional`, etc.), not builtin generic forms (`list[...]`, `dict[...]`, ...).
+* When you need structures, define idiomatic **Pydantic v2** models (no ad-hoc dicts, no dataclasses for runtime models).
+* **Typer** for CLIs (typed arguments; treat commands as public functions, not as wrappers).
+* **Loguru** for logging (configure once).
+* Paths use `pathlib.Path`. Prefer Unicode output.
+* Tools (configured in `pyproject.toml`): Black (100 cols), Pyright (strict).
