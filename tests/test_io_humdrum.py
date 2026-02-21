@@ -1,4 +1,3 @@
-
 """
 I/O tests
 ---------
@@ -11,6 +10,7 @@ Invariants:
 """
 
 from pathlib import Path
+
 import pytest
 from composer_toolchain.score import (
     kern_to_score,
@@ -20,7 +20,12 @@ from composer_toolchain.score import (
     score_to_kern,
     UnsupportedFormatError,
 )
-from composer_toolchain.test_utils import score_fingerprint, build_simple_score, build_ts_score
+from .helpers import (
+    build_simple_score,
+    build_ts_score,
+    score_fingerprint,
+)
+
 
 def test_roundtrip_kern_fingerprint():
     """Round-trip through **kern preserves structure and per-measure content for simple meters."""
@@ -43,13 +48,21 @@ def test_roundtrip_kern_with_ts_changes():
     assert s.highestTime == s2.highestTime
     # Measure counts and offsets equal
     for pi in range(len(s.parts)):
-        m1 = [int(m.number) for m in s.parts[pi].getElementsByClass("Measure") if m.number]
-        m2 = [int(m.number) for m in s2.parts[pi].getElementsByClass("Measure") if m.number]
+        m1 = [
+            int(m.number) for m in s.parts[pi].getElementsByClass("Measure") if m.number
+        ]
+        m2 = [
+            int(m.number)
+            for m in s2.parts[pi].getElementsByClass("Measure")
+            if m.number
+        ]
         assert m1 == m2
+
 
 def test_bad_type(tmp_path: Path):
     """Unsupported suffixes should raise a clear error."""
     from pathlib import Path
+
     p = tmp_path / "bad.txt"
     p.write_text("not a score")
     try:
@@ -58,6 +71,7 @@ def test_bad_type(tmp_path: Path):
         pass
     else:
         raise AssertionError("expected UnsupportedFormatError for .txt")
+
 
 def test_save_reparse_tmp(tmp_path: Path):
     """Saving to humdrum should produce a file that parses cleanly."""

@@ -25,11 +25,13 @@ from composer_toolchain.score import (
     kern_to_score,
     score_to_kern,
 )
-from composer_toolchain.test_utils import (
-    score_fingerprint,
+from .helpers import (
+    add_structure,
+    add_tie_across,
     build_simple_score,
     build_ts_score,
-    add_tie_across,
+    measure_fingerprint,
+    score_fingerprint,
 )
 
 
@@ -110,7 +112,6 @@ def test_blank_preserves_structure():
     """Blanking should preserve clef/key/time inside the measure while removing notes."""
     s = build_ts_score(["4/4", "4/4", "4/4"], n_parts=1)
     # Add structure to measure 2
-    from composer_toolchain.test_utils import add_structure
 
     add_structure(s.parts[0], 2, keysig_fifths=3, clef=True)
     out = delete_measures(s, MeasureSpec(spec="2"), mode="blank")
@@ -125,7 +126,6 @@ def test_blank_preserves_structure():
     assert any(isinstance(el, KeySignature) for el in m2)
     assert any(isinstance(el, TimeSignature) for el in m2)
     # Only rests as musical atoms
-    from composer_toolchain.test_utils import measure_fingerprint
 
     fp = measure_fingerprint(m2)
     assert all(kind == "R" for _, kind, _ in fp)
@@ -207,7 +207,8 @@ def test_score_to_kern_global_comments(tmp_path):
 
 def test_global_comment_positions_roundtrip():
     """Global comments across multiple measures retain offsets and order through roundtrip."""
-    text = dedent("""
+    text = dedent(
+        """
         !! Header A
         !! Header B
         **kern
@@ -221,7 +222,8 @@ def test_global_comment_positions_roundtrip():
         =3
         1e
         *-
-    """).strip()
+    """
+    ).strip()
 
     score = kern_to_score(text)
     comments = list(score.getElementsByClass(GlobalComment))

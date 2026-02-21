@@ -14,7 +14,7 @@ from music21.stream import Score
 from composer_toolchain.score import load_score, normalize, normalize_score
 
 
-_CORPUS_ROOT = Path(__file__).resolve().parents[2] / "corpus"
+_CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
 
 # Curated set of representative scores covering different notational edge cases.
 # - keyboard_polyphony: densely voiced piano texture (MusicXML)

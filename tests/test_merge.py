@@ -20,11 +20,9 @@ from composer_toolchain.score import (
     create_excerpt,
     merge_excerpt,
 )
-from composer_toolchain.test_utils import (
-    score_fingerprint,
-    build_simple_score,
-    add_structure,
-)
+
+from .helpers import add_structure, build_simple_score, score_fingerprint
+from tests.helpers import add_structure, build_simple_score, score_fingerprint
 
 
 def test_extract_and_merge_randomized_changes():

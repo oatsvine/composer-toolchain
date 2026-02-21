@@ -16,15 +16,11 @@ from composer_toolchain.score import (
 )
 from composer_toolchain.core import Manifest, ScoreSpec, Context
 
-SAMPLE_SCORE = Path(
-    "/data/workspace/in/mxl/BWV_999_Prelude_in_c_minor_for_lautenwerk.mxl"
-)
-ALT_SAMPLE_SCORE = Path("/data/workspace/in/mxl/Adagio_and_Fugue_in_C_minor_K546.mxl")
-MULTI_MOVEMENT_SCORE = Path(
-    "/data/workspace/in/mxl/Mozart_-_Symphony_No._41_-_Jupiter.mxl"
-)
-MULTI_MOVEMENT_DIR = MULTI_MOVEMENT_SCORE.with_suffix("")
-MULTI_MOVEMENT_FRAGMENT = MULTI_MOVEMENT_DIR / "score.1-314.xml"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CORPUS_ROOT = PROJECT_ROOT / "corpus"
+SAMPLE_SCORE = CORPUS_ROOT / "bwv891-prelude.krn"
+ALT_SAMPLE_SCORE = CORPUS_ROOT / "bwv891-fugue.krn"
+MULTI_MOVEMENT_SCORE = CORPUS_ROOT / "Mozart_-_Symphony_No._41_-_Jupiter.mxl"
 
 
 def _first_notated_span(score: Score) -> Tuple[str, int, str]:
@@ -33,7 +29,8 @@ def _first_notated_span(score: Score) -> Tuple[str, int, str]:
             candidate = measure.recurse().getElementsByClass(Note).first()
             if candidate is None or measure.number is None:
                 continue
-            part_token = Context._canonical_part_id(part)
+            label = part.partName or part.partAbbreviation or str(part.id)
+            part_token = snake_case(label)
             return part_token, int(measure.number), candidate.nameWithOctave
     raise AssertionError("score must contain at least one notated note")
 
@@ -50,9 +47,9 @@ def sample_workspace(tmp_path: Path) -> Context:
 
 @pytest.fixture(scope="session")
 def mozart_fragment_score() -> Score:
-    if not MULTI_MOVEMENT_FRAGMENT.exists():
-        pytest.skip("Mozart Jupiter fragment fixture missing")
-    return normalize(load_score(MULTI_MOVEMENT_FRAGMENT))
+    if not MULTI_MOVEMENT_SCORE.exists():
+        pytest.skip("Mozart Jupiter sample missing")
+    return normalize(load_score(MULTI_MOVEMENT_SCORE))
 
 
 def test_export_midi(sample_workspace: Context) -> None:
@@ -141,7 +138,7 @@ def test_spec(sample_workspace: Context) -> None:
 def test_spec_multimovement(
     sample_workspace: Context, mozart_fragment_score: Score
 ) -> None:
-    spec = sample_workspace._build_spec(mozart_fragment_score)
+    spec = ScoreSpec.build(mozart_fragment_score)
     assert len(spec.parts) >= 10
     assert spec.movements, "fragment must expose movement metadata"
     assert len(spec.time_signatures) > 1

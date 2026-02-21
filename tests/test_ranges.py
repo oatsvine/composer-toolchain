@@ -1,4 +1,3 @@
-
 """
 Range parsing/expansion tests
 -----------------------------
@@ -11,12 +10,14 @@ import pytest
 from pydantic import ValidationError
 
 from composer_toolchain.score import MeasureSpec, RangeParseError, expand_measure_range
-from composer_toolchain.test_utils import build_simple_score
+from .helpers import build_simple_score
+
 
 def test_parse_measure_range_valid():
     """Happy path examples should parse to the expected tuples (including open-ended)."""
     spec = MeasureSpec(spec="1-4,7,9-10,12-")
-    assert spec.ranges == [(1,4),(7,7),(9,10),(12,None)]
+    assert spec.ranges == [(1, 4), (7, 7), (9, 10), (12, None)]
+
 
 def test_parse_measure_range_invalid():
     """Invalid fragments must raise RangeParseError, not be silently accepted."""
@@ -24,6 +25,7 @@ def test_parse_measure_range_invalid():
     for b in bad:
         with pytest.raises(ValidationError):
             MeasureSpec(spec=b)
+
 
 def test_expand_measure_range_contiguity_and_beyond():
     """Non-contiguous beyond-end tails must be rejected."""

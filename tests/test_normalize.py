@@ -20,7 +20,7 @@ from composer_toolchain.score import (
     normalize_score,
     score_to_kern,
 )
-from composer_toolchain.test_utils import score_fingerprint
+from .helpers import score_fingerprint
 
 
 @pytest.mark.parametrize("sample_key", ["keyboard_polyphony"])
@@ -32,7 +32,9 @@ def test_flatten_voices_eliminates_voice_containers(raw_corpus_scores, sample_ke
     assert has_voice, "fixture expectation: raw score should include Voice containers"
 
     flattened = flatten_voices_to_parts(raw)
-    assert not any(flattened.recurse().getElementsByClass(Voice)), "voices must be hoisted"
+    assert not any(
+        flattened.recurse().getElementsByClass(Voice)
+    ), "voices must be hoisted"
 
 
 def test_normalize_score_aligns_and_numbers_parts(raw_corpus_scores):
@@ -45,7 +47,9 @@ def test_normalize_score_aligns_and_numbers_parts(raw_corpus_scores):
     first_part.remove(measures[-1])  # desync the first part intentionally
 
     normalized = normalize_score(raw)
-    measure_sequences = [list(p.getElementsByClass("Measure")) for p in normalized.parts]
+    measure_sequences = [
+        list(p.getElementsByClass("Measure")) for p in normalized.parts
+    ]
     counts = {len(seq) for seq in measure_sequences}
     assert len(counts) == 1, "measure counts must be uniform"
 
@@ -57,8 +61,7 @@ def test_normalize_score_aligns_and_numbers_parts(raw_corpus_scores):
     # Idempotence: applying normalize_score again should not change structure
     rebound = normalize_score(deepcopy(normalized))
     rebound_sequences = [
-        [m.number for m in part.getElementsByClass("Measure")]
-        for part in rebound.parts
+        [m.number for m in part.getElementsByClass("Measure")] for part in rebound.parts
     ]
     for numbers in rebound_sequences:
         assert numbers == expected_numbers

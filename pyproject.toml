@@ -1,3 +1,9 @@
+[build-system]
+requires = [
+    "uv-build>=0.9.6,<0.10.0",
+]
+build-backend = "uv_build"
+
 [project]
 name = "composer-toolchain"
 version = "0.1.0"
@@ -11,8 +17,6 @@ dependencies = [
   "typer",
   "loguru",
   "backoff",
-  "black",
-  "pyright",
   "music21",
   "converter21",
   "pydub",
@@ -24,18 +28,29 @@ mcp = [
   "openai-agents",
   "fastmcp",
 ]
-
 dev = [
   "pytest",
   "pytest-asyncio",
+  "black",
+  "pyright",
 ]
 
-[tool.setuptools]
-packages = ["composer_toolchain", "tests"]
+[dependency-groups]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+  "black",
+  "pyright",
+]
 
 [tool.pyright]
-include = ["composer_toolchain", "tests"]
+include = ["src", "tests"]
 exclude = ["**/node_modules", "**/__pycache__", "lib"]
+venvPath = "."
+venv = ".venv"
+extraPaths = [
+  ".venv/lib/python3.11/site-packages",
+]
 
 [tool.uv.pip]
 prerelease = "allow"

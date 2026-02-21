@@ -289,10 +289,11 @@ def merge_excerpt(
 ) -> None:
     """Merge a Humdrum excerpt (under excerpts/) back into the master."""
     workspace = Context(work_dir=work_dir)
+    excerpts_dir = workspace.subdir("excerpts")
     candidate = (
-        choose_score(workspace.subdir(), filter_suffix={".krn"})
+        choose_score(excerpts_dir, filter_suffix={".krn"})
         if filename is None
-        else (filename if filename.is_absolute() else workspace.subdir() / filename)
+        else (filename if filename.is_absolute() else excerpts_dir / filename)
     )
     candidate = candidate.resolve()
     if not candidate.exists():
