@@ -50,44 +50,150 @@ class PartInfo(BaseModel):
     instrument: Optional[str] = None
 
 
+class MovementInfo(BaseModel):
+    number: Optional[int] = Field(
+        default=None,
+        description="Movement index within the work's formal hierarchy (1-based).",
+    )
+    title: Optional[str] = Field(
+        default=None,
+        description="Movement or section label (e.g., 'Allegro').",
+    )
+
+
+class MeasureCue(BaseModel):
+    measure: int = Field(description="Measure number for this structural snapshot")
+    time_signature: Optional[str] = Field(
+        default=None, description="Active time signature ratio string"
+    )
+    key_signature: Optional[str] = Field(
+        default=None, description="Key summary such as 'G major'"
+    )
+    tempo_bpm: Optional[int] = Field(
+        default=None, description="Metronome marking in beats per minute"
+    )
+
+
+class CueSpan(BaseModel):
+    start_measure: int
+    end_measure: int
+    time_signature: Optional[str]
+    key_signature: Optional[str]
+    tempo_bpm: Optional[int]
+
+
 class ScoreSpec(BaseModel):
-    """Structured snapshot of a normalized score and its metadata."""
+    """Composer-facing summary of a normalized score's structure.
+
+    Inspired by the hierarchy outlined in *Foundational Concepts for Phrase-Level
+    Forms*, `ScoreSpec` captures only the layers composers scan when shaping
+    phrases: title/composer at the top, movements for sectional context,
+    instrumentation, and a DRY map of measure-level cues (meter, key, tempo).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    # NOTE: This is more than enough medatata. We don't want music21 parity.
-    title: str = Field(description="Primary title (metadata.title or fallback stem)")
-    movement_number: Optional[str] = Field(
-        default=None,
-        description="Movement identifier as exposed by metadata.movementNumber",
-    )
-    movement_name: Optional[str] = Field(
-        default=None, description="Movement title from metadata.movementName"
+    title: str = Field(
+        description=(
+            "Primary title suitable for labeling the movement/section (falls back"
+            " to the file stem when metadata is missing)."
+        )
     )
     composer: Optional[str] = Field(
-        default=None, description="Preferred composer summary string"
+        default=None,
+        description=(
+            "Composer credit—paired with the title, it hints at phrase and"
+            " cadence conventions a musician might expect."
+        ),
     )
-
     parts: list[PartInfo] = Field(
-        description="List of parts in the score; part_id must be unique and non-empty"
+        description=(
+            "Ordered list of parts/instrumentation. Canonical part_ids keep"
+            " excerpts mergeable without guesswork."
+        )
     )
-
-    # NOTE: use only the **first part** of a score as proxy to determine these maps.
-    movements: Dict[int, str] = Field(
-        description="Map movement number to movement title"
+    movements: list[MovementInfo] = Field(
+        default_factory=list,
+        description=(
+            "Movement or section labels supplying the large-scale context above"
+            " phrase-level edits."
+        ),
     )
-    time_signatures: Dict[int, str] = Field(
-        description="Map measure number to time signature"
-    )
-    key_signatures: Dict[int, str] = Field(
-        description="Map measure number to key signature"
-    )
-    metronome_marks: Dict[Tuple[int, int], int] = Field(
-        description="Map (measure number, beat) to metronome mark (number)"
+    measure_cues: Dict[int, MeasureCue] = Field(
+        default_factory=dict,
+        description=(
+            "Aggregated structural cues per measure (time signature, key, tempo)"
+            " derived from the normalized score."
+        ),
     )
     comments: Dict[Tuple[int, float], str] = Field(
-        description="Map (measure number, offset) to comment text"
+        default_factory=dict,
+        description=(
+            "(Measure, offset) → global comments for rehearsal or analysis" " markings."
+        ),
     )
+    total_measures: int = Field(
+        ge=0,
+        description="Highest numbered measure present in the normalized score",
+    )
+
+    def primary_movement(self) -> Optional[MovementInfo]:
+        """Return the first movement entry, if any."""
+
+        return self.movements[0] if self.movements else None
+
+    def iter_cue_spans(self) -> list[CueSpan]:
+        """Return contiguous measure ranges where structural cues stay constant."""
+
+        if self.total_measures <= 0:
+            return []
+
+        spans: list[CueSpan] = []
+        current_ts: Optional[str] = None
+        current_key: Optional[str] = None
+        current_tempo: Optional[int] = None
+        span_start = 1
+
+        for measure in range(1, self.total_measures + 1):
+            cue = self.measure_cues.get(measure)
+            ts = current_ts
+            key = current_key
+            tempo = current_tempo
+            if cue:
+                if cue.time_signature is not None:
+                    ts = cue.time_signature
+                if cue.key_signature is not None:
+                    key = cue.key_signature
+                if cue.tempo_bpm is not None:
+                    tempo = cue.tempo_bpm
+
+            if measure == span_start:
+                current_ts, current_key, current_tempo = ts, key, tempo
+                continue
+
+            if ts != current_ts or key != current_key or tempo != current_tempo:
+                spans.append(
+                    CueSpan(
+                        start_measure=span_start,
+                        end_measure=measure - 1,
+                        time_signature=current_ts,
+                        key_signature=current_key,
+                        tempo_bpm=current_tempo,
+                    )
+                )
+                span_start = measure
+                current_ts, current_key, current_tempo = ts, key, tempo
+
+        spans.append(
+            CueSpan(
+                start_measure=span_start,
+                end_measure=self.total_measures,
+                time_signature=current_ts,
+                key_signature=current_key,
+                tempo_bpm=current_tempo,
+            )
+        )
+        return spans
 
     @classmethod
     def build(cls, score: Score) -> "ScoreSpec":
@@ -124,27 +230,32 @@ class ScoreSpec(BaseModel):
             )
 
         structural_part = score.parts[0] if score.parts else None
-        movements: Dict[int, str] = {}
-        if movement_name:
+        movement_entries: list[MovementInfo] = []
+        if movement_name or movement_number is not None:
             try:
-                idx = int(movement_number) if movement_number is not None else 1
+                idx = int(movement_number) if movement_number is not None else None
             except ValueError:
-                idx = 1
-            movements[idx] = movement_name
+                idx = None
+            movement_entries.append(MovementInfo(number=idx, title=movement_name))
 
-        time_signatures: Dict[int, str] = {}
-        key_signatures: Dict[int, str] = {}
-        metronome_marks: Dict[Tuple[int, int], int] = {}
+        measure_cues: Dict[int, MeasureCue] = {}
+        last_measure = 0
         if structural_part is not None:
             for measure in structural_part.getElementsByClass(Measure):
                 if measure.number is None:
                     continue
                 m_number = int(measure.number)
+                last_measure = max(last_measure, m_number)
+                cue = measure_cues.get(m_number)
+                if cue is None:
+                    cue = MeasureCue(measure=m_number)
+                    measure_cues[m_number] = cue
+
                 ts = measure.getElementsByClass(TimeSignature).first()
                 if ts is None:
                     ts = measure.getContextByClass(TimeSignature)
                 if ts is not None:
-                    time_signatures[m_number] = ts.ratioString
+                    cue.time_signature = ts.ratioString
 
                 ks = measure.getElementsByClass(KeySignature).first()
                 if ks is None:
@@ -152,22 +263,14 @@ class ScoreSpec(BaseModel):
                 if ks is not None:
                     try:
                         key_obj = ks.asKey()
-                        key_signatures[m_number] = (
-                            f"{key_obj.tonic.name} {key_obj.mode}"
-                        )
+                        cue.key_signature = f"{key_obj.tonic.name} {key_obj.mode}"
                     except Exception:  # pragma: no cover - exotic key signature
-                        key_signatures[m_number] = str(ks.sharps)
+                        cue.key_signature = str(ks.sharps)
 
                 for mark in measure.recurse().getElementsByClass(MetronomeMark):
                     if mark.number is None:
                         continue
-                    beat_length = 1.0
-                    if ts is not None:
-                        beat_length = float(ts.beatDuration.quarterLength or 1.0)
-                        if beat_length <= 1e-6:
-                            beat_length = 1.0
-                    beat = int(mark.offset / beat_length) + 1 if beat_length > 0 else 1
-                    metronome_marks[(m_number, beat)] = int(round(mark.number))
+                    cue.tempo_bpm = int(round(mark.number))
 
         comments: Dict[Tuple[int, float], str] = {}
         for gc in score.getElementsByClass(GlobalComment):
@@ -192,15 +295,12 @@ class ScoreSpec(BaseModel):
         assert part, f"Score must contain at least one part: {score}"
         return cls(
             title=title_display,
-            movement_number=movement_number,
-            movement_name=movement_name,
             composer=composer,
             parts=parts_payload,
-            movements=movements,
-            time_signatures=time_signatures,
-            key_signatures=key_signatures,
-            metronome_marks=metronome_marks,
+            movements=movement_entries,
+            measure_cues=measure_cues,
             comments=comments,
+            total_measures=last_measure,
         )
 
 

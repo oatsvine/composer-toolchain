@@ -15,8 +15,14 @@ from rich.panel import Panel
 from rich.table import Table
 from typing_extensions import Annotated
 
+import questionary
+from questionary import Choice
+
 from composer_toolchain.score import MeasureSpec, PartSpec, load_score, normalize
 from composer_toolchain.core import Context, ScoreSpec
+
+# Refactor to use environment variable later.
+SCORES_CORPUS_DIR = Path("/data/workspace/in/mxl")
 
 console = Console()
 app = typer.Typer()
@@ -59,6 +65,202 @@ def choose_score(
     return score_file.resolve()
 
 
+def _prompt_required_text(message: str, *, default: Optional[str] = None) -> str:
+    """Prompt the user for a non-empty text value using questionary."""
+
+    default_text = default or ""
+    while True:
+        reply = questionary.text(message, default=default_text).unsafe_ask()
+        value = (reply or "").strip()
+        if value:
+            return value
+        console.print("[red]A value is required.[/red]")
+        default_text = ""
+
+
+def _interactive_source_filename(
+    workspace: Context, master_file: Path, provided: Optional[str]
+) -> str:
+    """Resolve the source score filename via questionary menus and chooser."""
+
+    scores_dir = workspace.subdir("scores")
+    master_name = master_file.name
+
+    if provided:
+        candidate = provided
+    else:
+        console.print(
+            Panel(
+                f"Master score: [bold]scores/{master_name}[/bold]\n"
+                "Choose how to source the excerpt.",
+                title="Source selection",
+                border_style="green",
+            )
+        )
+        action = questionary.select(
+            "Select excerpt source",
+            choices=[
+                Choice(title=f"Use master ({master_name})", value="master"),
+                Choice(title="Select another workspace score", value="workspace"),
+                Choice(title="Import from corpus before excerpting", value="import"),
+            ],
+            default="master",
+        ).unsafe_ask()
+        if action == "master":
+            candidate = master_name
+        elif action == "workspace":
+            selected = choose_score(scores_dir, filter_suffix={".krn"})
+            candidate = selected.name
+        else:
+            console.print(
+                Panel(
+                    "Choose a corpus score to import (sk opens next).",
+                    border_style="cyan",
+                )
+            )
+            external = choose_score(SCORES_CORPUS_DIR)
+            imported = workspace.import_score(score_file=external)
+            console.print(
+                f"[green]Imported[/green] {external.name} → {imported.relative_to(workspace.work_dir)}"
+            )
+            candidate = imported.name
+
+    source_path = scores_dir / candidate
+    if not source_path.exists():
+        raise typer.BadParameter(
+            f"Score not found under scores/: {candidate}",
+            param_name="filename",
+        )
+    return candidate
+
+
+def _render_score_metadata(spec: ScoreSpec, *, source_label: str) -> None:
+    """Print high-level metadata so the composer sees the formal context."""
+
+    table = Table(
+        title=f"Score Overview · {source_label}",
+        show_header=False,
+        box=None,
+    )
+    table.add_row("Title", spec.title)
+    if spec.composer:
+        table.add_row("Composer", spec.composer)
+    primary = spec.primary_movement()
+    if primary and (primary.number is not None or primary.title):
+        bits: list[str] = []
+        if primary.number is not None:
+            bits.append(f"No. {primary.number}")
+        if primary.title:
+            bits.append(primary.title)
+        table.add_row("Movement", " · ".join(bits))
+    if spec.movements:
+        labels: list[str] = []
+        for entry in spec.movements:
+            label_bits: list[str] = []
+            if entry.number is not None:
+                label_bits.append(str(entry.number))
+            if entry.title:
+                label_bits.append(entry.title)
+            if label_bits:
+                labels.append(
+                    ": ".join(label_bits) if len(label_bits) > 1 else label_bits[0]
+                )
+        if labels:
+            table.add_row("Movements", ", ".join(labels))
+    table.add_row("Parts", str(len(spec.parts)))
+    if spec.total_measures:
+        table.add_row("Length", f"{spec.total_measures} measures")
+    console.print(table)
+
+
+def _render_measure_landmarks(spec: ScoreSpec) -> None:
+    rows = spec.iter_cue_spans()
+    if not rows:
+        return
+    table = Table(
+        title="Structural Landmarks (changes in meter/key/tempo)",
+        header_style="bold cyan",
+        show_lines=False,
+        expand=False,
+    )
+    table.add_column("Measures", style="yellow", no_wrap=True)
+    table.add_column("Time Sig", style="magenta")
+    table.add_column("Key", style="green")
+    table.add_column("Tempo", style="cyan")
+    for cue in rows:
+        if cue.start_measure == cue.end_measure:
+            measure_label = str(cue.start_measure)
+        else:
+            measure_label = f"{cue.start_measure}-{cue.end_measure}"
+        table.add_row(
+            measure_label,
+            cue.time_signature or "–",
+            cue.key_signature or "–",
+            f"{cue.tempo_bpm} bpm" if cue.tempo_bpm else "–",
+        )
+    console.print(table)
+
+
+def _multiselect_parts(
+    spec: ScoreSpec, *, default_ids: Optional[set[str]] = None
+) -> list[str]:
+    default_ids = default_ids or {part.part_id for part in spec.parts}
+    while True:
+        choices: list[Choice] = []
+        for part in spec.parts:
+            label = part.name
+            if part.abbreviation and part.abbreviation != part.name:
+                label = f"{label} ({part.abbreviation})"
+            instrument = part.instrument or "–"
+            title = f"{label} · {instrument} [{part.part_id}]"
+            choices.append(
+                Choice(
+                    title=title, value=part.part_id, checked=part.part_id in default_ids
+                )
+            )
+        selected = questionary.checkbox(
+            "Select parts for the excerpt",
+            choices=choices,
+            instruction="↑/↓ move · Space toggle · 'a' toggles all · Enter accept",
+        ).unsafe_ask()
+        if selected:
+            return selected
+        console.print("[red]Select at least one part.[/red]")
+        default_ids = {part.part_id for part in spec.parts}
+
+
+def _interactive_part_selection(
+    spec: ScoreSpec, preset_ids: Optional[list[str]]
+) -> list[str]:
+    if preset_ids:
+        preset_label = ", ".join(preset_ids)
+        reuse = questionary.confirm(
+            f"Use provided part list? {preset_label}", default=True
+        ).unsafe_ask()
+        if reuse:
+            return preset_ids
+        console.print("[cyan]Adjust selection below.[/cyan]")
+    return _multiselect_parts(spec, default_ids=None)
+
+
+def _interactive_measure_spec(spec: ScoreSpec, preset: Optional[str]) -> str:
+    _render_measure_landmarks(spec)
+    if preset:
+        preset_clean = preset.strip()
+        reuse = questionary.confirm(
+            f"Use existing measure spec? {preset_clean}", default=True
+        ).unsafe_ask()
+        if reuse:
+            return preset_clean
+        console.print(
+            "[cyan]Enter new measure spans informed by the landmarks above.[/cyan]"
+        )
+    return _prompt_required_text(
+        "Measure ranges (e.g. '5-12,18'; use ascending spans per MeasureSpec)",
+        default=preset.strip() if preset else None,
+    )
+
+
 @app.command()
 def init_with_score(
     score_file: Annotated[
@@ -68,15 +270,6 @@ def init_with_score(
             resolve_path=True,
         ),
     ] = None,
-    scores_dir: Annotated[
-        Path,
-        typer.Option(
-            help="Directory containing candidate source scores.",
-            exists=True,
-            file_okay=False,
-            resolve_path=True,
-        ),
-    ] = Path("/data/workspace/in/mxl"),
     cwd: Annotated[
         Path,
         typer.Option(
@@ -89,9 +282,11 @@ def init_with_score(
 ) -> Path:
     """Create a new workspace from an external score."""
     selected = (
-        choose_score(scores_dir)
+        choose_score(SCORES_CORPUS_DIR)
         if score_file is None
-        else (score_file if score_file.is_absolute() else scores_dir / score_file)
+        else (
+            score_file if score_file.is_absolute() else SCORES_CORPUS_DIR / score_file
+        )
     )
     selected = selected.resolve()
     if not selected.exists():
@@ -119,22 +314,14 @@ def import_score(
             resolve_path=True,
         ),
     ] = None,
-    # NOTE: scores_dir is ever only relevant here in the CLI, and goes together with choose_score().
-    scores_dir: Annotated[
-        Path,
-        typer.Option(
-            help="Directory containing candidate source scores.",
-            exists=True,
-            file_okay=False,
-            resolve_path=True,
-        ),
-    ] = Path("/data/workspace/in/mxl"),
 ) -> Path:
     """Normalize an external score into the workspace `scores/` library."""
     candidate = (
-        choose_score(scores_dir)
+        choose_score(SCORES_CORPUS_DIR)
         if score_file is None
-        else (score_file if score_file.is_absolute() else scores_dir / score_file)
+        else (
+            score_file if score_file.is_absolute() else SCORES_CORPUS_DIR / score_file
+        )
     )
     candidate = candidate.resolve()
     if not candidate.exists():
@@ -200,54 +387,132 @@ def create_excerpt(
     work_dir: Annotated[
         Path,
         typer.Argument(
-            help="Workspace root directory.",
+            help="Workspace root directory (the folder created via init-with-score).",
             exists=True,
             file_okay=False,
             resolve_path=True,
         ),
     ] = Path.cwd(),
     parts: Annotated[
-        str,
+        Optional[str],
         typer.Option(
-            help="Comma-separated canonical part ids (e.g. 'vn1,vn2').",
-            prompt=True,
+            "--parts",
+            help=(
+                "Comma-separated canonical part ids to include "
+                "(matches PartSpec tokens such as 'flute,vn1')."
+            ),
         ),
-    ] = "",
+    ] = None,
     measures: Annotated[
-        str,
+        Optional[str],
         typer.Option(
-            help="Measure specification such as '17-24'.",
-            prompt=True,
+            "--measures",
+            help=(
+                "Measure ranges to extract, e.g. '1-8,17-'. Uses MeasureSpec "
+                "grammar with ascending, comma-separated spans."
+            ),
         ),
-    ] = "",
+    ] = None,
     filename: Annotated[
         Optional[str],
         typer.Option(
-            help="Filename of score (under scores/) to carve from (defaults to current master).",
-            resolve_path=True,
+            help=(
+                "Workspace score filename under scores/ to carve from; "
+                "defaults to the current master after confirmation."
+            ),
         ),
     ] = None,
     non_interactive: Annotated[
         bool,
         typer.Option(
-            help="No interactive prompts; fail if arguments are missing.",
+            help=(
+                "Skip Rich prompts (automation mode). Requires --parts/--measures "
+                "and falls back to the master score when --filename is omitted."
+            ),
         ),
     ] = False,
 ) -> Path:
-    """Extract a Humdrum excerpt from the master (or another workspace score)."""
-    if not parts:
-        raise typer.BadParameter("At least one part id is required")
-    if not measures:
-        raise typer.BadParameter("Measure specification cannot be empty")
+    """Slice an excerpt from a workspace score with Rich-guided prompts.
 
-    part_spec = PartSpec(tokens=parts)
-    measure_spec = MeasureSpec(spec=measures)
+    Flow
+    ----
+    1. Confirm which workspace score to carve (the manifest master is suggested first)
+       and review its title/composer/movement metadata for context.
+    2. Multi-select the parts via questionary checkboxes (press 'a' to toggle all).
+    3. Review meter/key/tempo landmarks aggregated from ScoreSpec before entering the
+       MeasureSpec string (open tails such as "32-" are still accepted).
+
+    The resulting Humdrum file is written to `excerpts/` following the standard
+    `<source>_<parts>_<measures>.krn` scheme so it can later be merged back with
+    `merge-excerpt`. Use `--non-interactive` for scripts that supply every option explicitly.
+    """
 
     workspace = Context(work_dir=work_dir)
+    master_file = workspace._master_file()
+    master_name = master_file.name
+
+    provided_parts = parts.strip() if parts else None
+    provided_measures = measures.strip() if measures else None
+
+    provided_part_ids: Optional[list[str]] = None
+    if provided_parts:
+        try:
+            provided_part_ids = PartSpec(tokens=provided_parts).ids
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_name="parts") from exc
+
+    if non_interactive:
+        if not provided_parts:
+            raise typer.BadParameter(
+                "--parts is required when using --non-interactive.",
+                param_name="parts",
+            )
+        if not provided_measures:
+            raise typer.BadParameter(
+                "--measures is required when using --non-interactive.",
+                param_name="measures",
+            )
+        parts_value = provided_parts
+        measures_value = provided_measures
+        source_name = filename.strip() if filename else master_name
+    else:
+        source_name = _interactive_source_filename(
+            workspace=workspace,
+            master_file=master_file,
+            provided=filename.strip() if filename else None,
+        )
+
+        try:
+            spec = workspace.score_spec(
+                None if source_name == master_name else source_name
+            )
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_name="filename") from exc
+
+        label = f"scores/{source_name}"
+        if source_name == master_name:
+            label = f"master (scores/{source_name})"
+        _render_score_metadata(spec, source_label=label)
+        selected_ids = _interactive_part_selection(spec, provided_part_ids)
+        parts_value = ",".join(selected_ids)
+        measures_value = _interactive_measure_spec(spec, provided_measures)
+
+    try:
+        part_spec = PartSpec(tokens=parts_value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_name="parts") from exc
+
+    try:
+        measure_spec = MeasureSpec(spec=measures_value)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_name="measures") from exc
+
+    source_override = None if source_name == master_name else source_name
+
     excerpt_file = workspace.create_and_store_excerpt(
         part_spec=part_spec,
         measure_spec=measure_spec,
-        filename=filename,
+        filename=source_override,
     )
     console.print(
         f"[green]Excerpt created[/green]: {excerpt_file.relative_to(work_dir)}"

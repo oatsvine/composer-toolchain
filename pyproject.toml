@@ -14,6 +14,7 @@ requires-python = ">=3.11"
 dependencies = [
   "pydantic>=2.11.4",
   "rich",
+  "questionary",
   "typer",
   "loguru",
   "backoff",

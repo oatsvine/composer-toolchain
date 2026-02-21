@@ -951,7 +951,10 @@ def _last_known_meter(score: Score) -> TimeSignature:
 
 
 def create_excerpt(
-    score: Score, part_spec: PartSpec, measure_spec: MeasureSpec
+    score: Score,
+    part_spec: PartSpec,
+    measure_spec: MeasureSpec,
+    suffix: Optional[str] = None,
 ) -> Score:
     """
     Extract an excerpt (subscore) with a subset of parts and measures.

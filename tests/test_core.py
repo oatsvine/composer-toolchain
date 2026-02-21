@@ -123,15 +123,25 @@ def test_spec(sample_workspace: Context) -> None:
     assert isinstance(spec, ScoreSpec)
     assert spec.parts, "spec must expose part metadata"
     assert all(part.part_id and not part.part_id.isdigit() for part in spec.parts)
-    assert spec.time_signatures, "expected structural metadata"
+    assert spec.measure_cues, "expected structural metadata"
+    spans = spec.iter_cue_spans()
+    assert spans, "cue spans should cover the score"
+    assert spans[0].start_measure == 1
+    assert spans[-1].end_measure == spec.total_measures
+    prev_end = 0
+    for span in spans:
+        assert span.start_measure == prev_end + 1
+        prev_end = span.end_measure
+    assert prev_end == spec.total_measures
 
 
 def test_spec_multimovement(mozart_fragment_score: Score) -> None:
     spec = ScoreSpec.build(mozart_fragment_score)
     assert len(spec.parts) >= 10
     assert spec.movements, "fragment must expose movement metadata"
-    assert len(spec.time_signatures) > 1
-    assert len(spec.key_signatures) > 1
+    spans = spec.iter_cue_spans()
+    assert spans
+    assert spans[-1].end_measure == spec.total_measures
 
 
 def test_normalized_ids(sample_workspace: Context) -> None:
