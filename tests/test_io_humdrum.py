@@ -20,7 +20,7 @@ from composer_toolchain.score import (
     score_to_kern,
     UnsupportedFormatError,
 )
-from tests.composer_toolchain.test_utils import score_fingerprint, build_simple_score, build_ts_score
+from composer_toolchain.test_utils import score_fingerprint, build_simple_score, build_ts_score
 
 def test_roundtrip_kern_fingerprint():
     """Round-trip through **kern preserves structure and per-measure content for simple meters."""

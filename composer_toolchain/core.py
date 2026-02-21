@@ -1,37 +1,32 @@
-# NOTE: Renamed cli.py into toolchain.py to better reflect its purpose. Then created new cli.py as entry point, migrating from fire to typer.
-"""Workspace utilities for humdrum editing.
+"""Core toolchain logic for score workspace management and operations.
 
-Authoritative fix d7b4d6d (2025-10-13) corrected three regressions:
-1. Using ``Path.relative_to`` as a guard on workspace-managed filenames rejected
-   valid masters/excerpts and silently encouraged ad-hoc resolution. Directive:
-   only accept bare filenames and join them under the trusted subdirectories;
-   never re-introduce ``relative_to`` checks for these paths.
-2. Resolving sources before archival flattened directory structure and let
-   supersede escape the workspace. Directive: operate on the passed
-   ``src_file`` directly so versions mirror the workspace layout.
-3. Permitting ``Path`` arguments to ``spec`` allowed cross-workspace lookups.
-   Directive: keep the public surface string-only and validate existence inside
-   ``scores/``.
+This module provides the `Context` class, which encapsulates operations
+for managing a musical score workspace. It includes functionality for
+importing scores, changing the master score, creating and merging excerpts,
+and exporting MIDI files. 
+
+All toolchain operations are encapsulated here to maintain a clean separation
+from CLI interfaces and higher-level application logic.
 """
 
 import re
 from pathlib import Path
-from typing import Dict, Literal, Optional, Sequence, Set, Tuple
+from typing import Dict, Literal, Optional, Sequence, Tuple
 
 from loguru import logger
 from music21.humdrum.spineParser import GlobalComment
 from music21.key import KeySignature
 from music21.meter.base import TimeSignature
-from music21.note import Note
 from music21.stream import Score
 from music21.stream.base import Measure, Part
 from music21.tempo import MetronomeMark
 from pydantic import BaseModel, ConfigDict, Field
+
 from composer_toolchain.score import (
     MeasureSpec,
     PartSpec,
-    delete_measures,
     create_excerpt,
+    delete_measures,
     insert_blank_measures,
     load_score,
     merge_excerpt,
@@ -100,8 +95,7 @@ class ScoreSpec(BaseModel):
     )
 
 
-# NOTE: Renamed ScoreOps into Workspace to better reflect its purpose.
-class Workspace:
+class Context:
     """CLI utilities for score conversions and edit operations."""
 
     def __init__(
@@ -123,7 +117,6 @@ class Workspace:
         This is the first step in the workflow of this toolchain.
         This inits from an external score, future variant is to init from a blueprint.
         """
-        # EXPOSE: command
         source = score_file.resolve()
         if not source.exists():
             raise FileNotFoundError(f"Score file not found: {source}")
@@ -145,20 +138,12 @@ class Workspace:
         logger.success("Imported master: {}", target.relative_to(work_dir))
         return work_dir
 
-    # NOTE: Here is the rule,
-    #   All file ARGUMENTS relative to work_dir must be called just `filename: str` (never path, never filepath, never filefilename, never file_path, never file-name, never file name, etc).
-    #   ONLY if there is more than one file argument, qualify to disambiguate.
-    #   Never use Path unless the file is external to the workspace (which it is here, hence the exception).
-    #   You must apply these rules to EVERY file argument across the board, in ALL modules.
     def import_score(self, score_file: Path) -> Path:
         """Import external scores in the working directory."""
-        # EXPOSE: tool, command
-        # NOTE: External source files stay as-is. Earlier resolve()+alias pattern hid validation gaps; keeping the original Path enforces explicit checks.
         if not score_file.exists():
             raise FileNotFoundError(f"Score file not found: {score_file}")
         stem = snake_case(score_file.stem)
         score = normalize(load_score(score_file))
-        # NOTE: Workspace scores/ not to be confused with "scores_dir" CLI argument when importing from external repertoire.
         scores_dir = self.work_dir / "scores"
         assert scores_dir.exists(), f"Scores directory not initialized: {scores_dir}"
         target = scores_dir / f"{stem}.krn"
@@ -211,8 +196,6 @@ class Workspace:
         - Import external score via `import_score()`. (prerequisite - file must exist in `scores/`)
         - Use `change_master()` to load the imported score.
         """
-        # EXPOSE: tool, command
-        # NOTE: Filename already scoped by Workspace contract; ``relative_to`` guards were removed in d7b4d6d and must not return.
         scores_dir = self.work_dir / "scores"
         score_file = scores_dir / filename
         if not score_file.exists():
@@ -267,7 +250,6 @@ class Workspace:
         """
         Convert the master score or another specified score to MIDI.
         """
-        # EXPOSE: tool, command
         master_file = self._master_file()
         score = load_score(master_file)
         midi_dir = self.work_dir / "midi"
@@ -284,21 +266,14 @@ class Workspace:
 
     def create_and_store_excerpt(
         self,
-        # NOTE: These types are CORRECT. Never use default values or raw types here. Only correct strong type.
-        # NOTE: Conversions to PartSpec/MeasureSpec belong in cli.py; tests and MCP must pass instances directly.
         part_spec: PartSpec,
         measure_spec: MeasureSpec,
-        # NOTE: This READ operation allow to specify other score in workspace to excerpt from.
-        # This is useful when composing with agent, to combine fragments from multiple scores.
         other_score: Optional[str],
     ) -> Path:
         """
         Create a Humdrum excerpt (kern subscore) and persist it under `excerpts/`.
         """
-        # EXPOSE: tool, command
         if other_score:
-            # NOTE: This is the correct pattern, all files relative to subdir of work_dir must be managed like this.
-            # HEURISTIC: Checking `relative_to` is always wrong.
             scores_dir = self.work_dir / "scores"
             source = scores_dir / other_score
             if not source.exists():
@@ -311,7 +286,6 @@ class Workspace:
             source = self._master_file()
         score = load_score(source)
         excerpt = create_excerpt(score, part_spec, measure_spec)
-        # NOTE: This is a subscore, so we give it a distinct name!
         canonical_parts = part_spec.ids
         stem = (
             f"{source.stem}_"
@@ -332,9 +306,6 @@ class Workspace:
         """
         Merge a Humdrum excerpt into the master score.
         """
-        # EXPOSE: tool
-        # NOTE: Always provide this interactive choosing convenience when choosing from set of files in the work_dir well-known structure (never outside of it).
-
         excerpts_dir = self.work_dir / "excerpts"
         excerpt_path = excerpts_dir / filename
         if not excerpt_path.exists():
@@ -370,7 +341,6 @@ class Workspace:
         mode: Literal["blank", "drop_renumber"] = "blank",
     ) -> None:
         """Remove measure ranges (across all parts) from the master score."""
-        # EXPOSE: tool
         master = self._master_score()
         spec_model = MeasureSpec(spec=measure_spec)
         updated = delete_measures(master, spec_model, mode=mode)
@@ -510,7 +480,6 @@ class Workspace:
         """
         Build structured metadata snapshot of the master score or another specified score.
         """
-        # EXPOSE: resource
         # NOTE: Accept string filenames only; Path arguments enabled cross-workspace lookups before d7b4d6d.
         if other_score:
             scores_dir = self.work_dir / "scores"
@@ -524,15 +493,3 @@ class Workspace:
 
         # DONE: spec() only builds structured metadata; rendering lives in info().
         return self._build_spec(score)
-
-    # LATER: Revisit this when needed.
-    # def seconds_map(self):
-    #     seconds_map = []
-    #     for entry in part.secondsMap:
-    #         record = {
-    #             "offset_seconds": entry["offsetSeconds"],
-    #             "duration_seconds": entry["durationSeconds"],
-    #             "end_time_seconds": entry["endTimeSeconds"],
-    #             "element": str(entry["element"]),
-    #         }
-    #         seconds_map.append(record)

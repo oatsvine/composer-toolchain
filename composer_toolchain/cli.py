@@ -1,12 +1,4 @@
-"""Typer entrypoints that translate validated CLI inputs into Workspace calls.
-
-Directives captured from the Fire→Typer migration:
-- Keep every interactive or terminal concern inside this module; `Workspace`
-  stays headless and is only responsible for workspace orchestration.
-- Parse and validate raw CLI tokens here, converting them into the strongly
-  typed contracts (`PartSpec`, `MeasureSpec`, `Path`) that `Workspace` expects.
-- Guard workspace-relative artefacts (scores, Humdrum excerpts, versions) before
-  delegating so the core APIs never see untrusted filesystem state.
+"""Typer CLI interface to core toolchain.
 """
 
 from __future__ import annotations
@@ -25,10 +17,7 @@ from rich.table import Table
 from typing_extensions import Annotated
 
 from composer_toolchain.score import MeasureSpec, PartSpec, load_score, normalize
-from composer_toolchain.toolchain import ScoreSpec, Workspace, WorkspaceMeta
-
-__all__ = ["Workspace", "WorkspaceMeta", "ScoreSpec", "app"]
-
+from composer_toolchain.core import Context
 
 console = Console()
 app = typer.Typer()
@@ -61,7 +50,6 @@ def init_from_score(
     score_file: Annotated[
         Optional[Path],
         typer.Option(
-            "--score-file",
             help="Path to the source score. If omitted, launch interactive chooser.",
             resolve_path=True,
         ),
@@ -69,7 +57,6 @@ def init_from_score(
     scores_dir: Annotated[
         Path,
         typer.Option(
-            "--scores-dir",
             help="Directory containing candidate source scores.",
             exists=True,
             file_okay=False,
@@ -79,7 +66,6 @@ def init_from_score(
     cwd: Annotated[
         Path,
         typer.Option(
-            "--cwd",
             help="Root directory where the workspace will be created.",
             exists=True,
             file_okay=False,
@@ -96,7 +82,7 @@ def init_from_score(
     selected = selected.resolve()
     if not selected.exists():
         raise typer.BadParameter(f"Score file not found: {selected}")
-    created = Workspace.init_from_score(score_file=selected, cwd=cwd)
+    created = Context.init_from_score(score_file=selected, cwd=cwd)
     console.print(f"[green]Workspace created[/green]: {created}")
     return created
 
@@ -115,7 +101,6 @@ def import_score(
     score_file: Annotated[
         Optional[Path],
         typer.Option(
-            "--score-file",
             help="Score to import into the workspace library. If omitted, choose interactively.",
             resolve_path=True,
         ),
@@ -140,7 +125,7 @@ def import_score(
     candidate = candidate.resolve()
     if not candidate.exists():
         raise typer.BadParameter(f"Score file not found: {candidate}")
-    workspace = Workspace(work_dir=work_dir)
+    workspace = Context(work_dir=work_dir)
     target = workspace.import_score(score_file=candidate)
     console.print(
         f"[green]Imported[/green] {candidate.name} → {target.relative_to(work_dir)}"
@@ -174,7 +159,7 @@ def change_master(
     if not filename:
         filename = choose_score(scores_dir, filter_suffix={".krn"}).name
 
-    workspace = Workspace(work_dir=work_dir)
+    workspace = Context(work_dir=work_dir)
     workspace.change_master(filename=filename)
     console.print(f"[green]Master changed[/green] → scores/{filename}")
 
@@ -192,7 +177,7 @@ def export_midi(
     ] = Path.cwd(),
 ) -> Path:
     """Export the master score to MIDI."""
-    workspace = Workspace(work_dir=work_dir)
+    workspace = Context(work_dir=work_dir)
     midi = workspace.export_midi()
     console.print(f"[green]MIDI exported[/green]: {midi.relative_to(work_dir)}")
     return midi
@@ -212,7 +197,6 @@ def create_excerpt(
     parts: Annotated[
         str,
         typer.Option(
-            "--parts",
             help="Comma-separated canonical part ids (e.g. 'vn1,vn2').",
             prompt=True,
         ),
@@ -220,7 +204,6 @@ def create_excerpt(
     measures: Annotated[
         str,
         typer.Option(
-            "--measures",
             help="Measure specification such as '17-24'.",
             prompt=True,
         ),
@@ -228,7 +211,6 @@ def create_excerpt(
     other_score: Annotated[
         Optional[Path],
         typer.Option(
-            "--other-score",
             help="Alternate workspace score (under scores/) to carve from.",
             resolve_path=True,
         ),
@@ -243,7 +225,7 @@ def create_excerpt(
     part_spec = PartSpec(tokens=parts)
     measure_spec = MeasureSpec(spec=measures)
 
-    workspace = Workspace(work_dir=work_dir)
+    workspace = Context(work_dir=work_dir)
 
     source_filename: Optional[str]
     if other_score is not None:
@@ -287,7 +269,6 @@ def merge_excerpt(
     filename: Annotated[
         Optional[Path],
         typer.Option(
-            "--filename",
             help="Humdrum excerpt under excerpts/ to merge. If omitted, choose interactively.",
             resolve_path=True,
         ),
@@ -307,7 +288,7 @@ def merge_excerpt(
     if not candidate.exists():
         raise typer.BadParameter(f"Excerpt file not found: {candidate}")
 
-    workspace = Workspace(work_dir=work_dir)
+    workspace = Context(work_dir=work_dir)
     workspace.merge_excerpt(filename=candidate.name)
     console.print(f"[green]Excerpt merged[/green]: {candidate.relative_to(work_dir)}")
 
@@ -334,7 +315,6 @@ def remove(
     mode: Annotated[
         str,
         typer.Option(
-            "--mode",
             help="Removal mode ('blank' or 'drop_renumber').",
             case_sensitive=False,
         ),
@@ -352,7 +332,7 @@ def remove(
     else:
         raise typer.BadParameter("Mode must be 'blank' or 'drop_renumber'")
 
-    workspace = Workspace(work_dir=work_dir)
+    workspace = Context(work_dir=work_dir)
     workspace.delete_measures(measure_spec=measure_spec, mode=removal_mode)
     console.print(f"[yellow]Removed measures[/yellow]: {measure_spec} ({removal_mode})")
 
@@ -371,16 +351,16 @@ def expand(
     at: Annotated[
         int,
         typer.Option(
-            "--at", help="Measure index where blank measures should be inserted.", min=1
+            help="Measure index where blank measures should be inserted.", min=1
         ),
     ] = 1,
     count: Annotated[
         int,
-        typer.Option("--count", help="Number of blank measures to insert.", min=1),
+        typer.Option(help="Number of blank measures to insert.", min=1),
     ] = 1,
 ) -> None:
     """Insert blank measures into the master score."""
-    workspace = Workspace(work_dir=work_dir)
+    workspace = Context(work_dir=work_dir)
     workspace.expand_master(at=at, count=count)
     console.print(f"[yellow]Inserted blank measures[/yellow]: {count} @ {at}")
 
@@ -399,14 +379,13 @@ def info(
     other_score: Annotated[
         Optional[Path],
         typer.Option(
-            "--other-score",
             help="Alternate workspace score (under scores/) to inspect.",
             resolve_path=True,
         ),
     ] = None,
 ) -> None:
     """Render workspace and score metadata via Rich tables."""
-    client = Workspace(work_dir=work_dir)
+    client = Context(work_dir=work_dir)
 
     if other_score is None:
         score_path = client._master_file()
@@ -481,7 +460,7 @@ def print_comments(
     ] = Path.cwd(),
 ) -> None:
     """Dump the global comments stream for the master score."""
-    master = Workspace(work_dir=work_dir)._master_score()
+    master = Context(work_dir=work_dir)._master_score()
     stream = master.getElementsByClass(GlobalComment).stream()
     stream.show(fmt="text", addEndTimes=True)
 
@@ -499,11 +478,11 @@ def show(
     ] = Path.cwd(),
     fmt: Annotated[
         str,
-        typer.Option("--fmt", help="music21 show() format.", case_sensitive=False),
+        typer.Option(help="music21 show() format.", case_sensitive=False),
     ] = "text",
 ) -> None:
     """Relay music21.show for the master score."""
-    master = Workspace(work_dir=work_dir)._master_score()
+    master = Context(work_dir=work_dir)._master_score()
     master.show(fmt=fmt, addEndTimes=True)
 
 

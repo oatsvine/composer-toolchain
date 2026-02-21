@@ -1,6 +1,5 @@
 """
-composer_toolchain.score
-============
+Stateless music21 Score manipulation helpers.
 
 Public helper functions for manipulating `music21` Scores with strict, predictable
 semantics. All functions are **pure** (no in-place mutation on the given Score)
@@ -31,17 +30,6 @@ Key non-obvious `music21` behaviors called out below:
   reconnection solution requires pitch-continuity analysis at edit boundaries,
   which is beyond this helper's scope; we prefer correctness and a clean parse
   over aggressive reconnection heuristics.
-
-All public helpers include extensive docstrings explaining invariants and edge cases.
-
-# -----------------------------------------------------------------------------
-# EDIT OPERATIONS NOTE
-# -----------------------------------------------------------------------------
-# The delete/insert helpers intentionally "break" ties at structural boundaries
-# to avoid illegal dangling ties after removing or inserting measures. This is a
-# conservative policy that favors parsability. A musically-aware reconnection
-# heuristic may be layered on top if desired (e.g., re-tie when pitch continuity
-# and adjacency still hold across the new boundary).
 """
 
 import hashlib
@@ -70,6 +58,9 @@ import converter21  # type: ignore[attr-defined]
 from converter21.humdrum.humexceptions import HumdrumExportError  # type: ignore[attr-defined]
 
 converter21.register()  # required: register Humdrum/MEI I/O with music21
+
+# Cache Humdrum (**kern) serialisations keyed by score fingerprint to recover from transient export failures.
+_KERN_CACHE: Dict[str, Score] = {}
 
 
 # -------------------------- Errors ------------------------------
@@ -962,7 +953,6 @@ def _last_known_meter(score: Score) -> TimeSignature:
     return ts
 
 
-# NOTE: Renamed `extract_patch` => `create_excerpt`
 def create_excerpt(
     score: Score, part_spec: PartSpec, measure_spec: MeasureSpec
 ) -> Score:
@@ -1480,7 +1470,3 @@ def normalize_score(score: Score) -> Score:
     for offset, comment in comment_clones:
         out.insert(offset, comment)
     return out
-
-
-# Cache Humdrum (**kern) serialisations keyed by score fingerprint to recover from transient export failures.
-_KERN_CACHE: Dict[str, Score] = {}

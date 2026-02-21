@@ -20,7 +20,7 @@ from composer_toolchain.score import (
     normalize_score,
     score_to_kern,
 )
-from tests.composer_toolchain.test_utils import score_fingerprint
+from composer_toolchain.test_utils import score_fingerprint
 
 
 @pytest.mark.parametrize("sample_key", ["keyboard_polyphony"])

@@ -14,8 +14,17 @@ from typing import Optional
 
 from music21 import note as m21_note
 
-from composer_toolchain.score import MeasureSpec, PartSpec, create_excerpt, merge_excerpt
-from tests.composer_toolchain.test_utils import score_fingerprint, build_simple_score, add_structure
+from composer_toolchain.score import (
+    MeasureSpec,
+    PartSpec,
+    create_excerpt,
+    merge_excerpt,
+)
+from composer_toolchain.test_utils import (
+    score_fingerprint,
+    build_simple_score,
+    add_structure,
+)
 
 
 def test_extract_and_merge_randomized_changes():

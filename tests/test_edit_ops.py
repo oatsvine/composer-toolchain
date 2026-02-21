@@ -25,7 +25,7 @@ from composer_toolchain.score import (
     kern_to_score,
     score_to_kern,
 )
-from tests.composer_toolchain.test_utils import (
+from composer_toolchain.test_utils import (
     score_fingerprint,
     build_simple_score,
     build_ts_score,
@@ -110,7 +110,7 @@ def test_blank_preserves_structure():
     """Blanking should preserve clef/key/time inside the measure while removing notes."""
     s = build_ts_score(["4/4", "4/4", "4/4"], n_parts=1)
     # Add structure to measure 2
-    from tests.composer_toolchain.test_utils import add_structure
+    from composer_toolchain.test_utils import add_structure
 
     add_structure(s.parts[0], 2, keysig_fifths=3, clef=True)
     out = delete_measures(s, MeasureSpec(spec="2"), mode="blank")
@@ -125,7 +125,7 @@ def test_blank_preserves_structure():
     assert any(isinstance(el, KeySignature) for el in m2)
     assert any(isinstance(el, TimeSignature) for el in m2)
     # Only rests as musical atoms
-    from tests.composer_toolchain.test_utils import measure_fingerprint
+    from composer_toolchain.test_utils import measure_fingerprint
 
     fp = measure_fingerprint(m2)
     assert all(kind == "R" for _, kind, _ in fp)

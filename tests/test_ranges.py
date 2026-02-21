@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from composer_toolchain.score import MeasureSpec, RangeParseError, expand_measure_range
-from tests.composer_toolchain.test_utils import build_simple_score
+from composer_toolchain.test_utils import build_simple_score
 
 def test_parse_measure_range_valid():
     """Happy path examples should parse to the expected tuples (including open-ended)."""

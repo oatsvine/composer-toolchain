@@ -7,8 +7,14 @@ from music21.note import Note
 from music21.stream import Score
 from music21.stream.base import Measure
 
-from composer_toolchain.score import MeasureSpec, PartSpec, load_score, normalize, snake_case
-from composer_toolchain.toolchain import Manifest, ScoreSpec, Workspace
+from composer_toolchain.score import (
+    MeasureSpec,
+    PartSpec,
+    load_score,
+    normalize,
+    snake_case,
+)
+from composer_toolchain.core import Manifest, ScoreSpec, Context
 
 SAMPLE_SCORE = Path(
     "/data/workspace/in/mxl/BWV_999_Prelude_in_c_minor_for_lautenwerk.mxl"
@@ -27,19 +33,19 @@ def _first_notated_span(score: Score) -> Tuple[str, int, str]:
             candidate = measure.recurse().getElementsByClass(Note).first()
             if candidate is None or measure.number is None:
                 continue
-            part_token = Workspace._canonical_part_id(part)
+            part_token = Context._canonical_part_id(part)
             return part_token, int(measure.number), candidate.nameWithOctave
     raise AssertionError("score must contain at least one notated note")
 
 
 @pytest.fixture()
-def sample_workspace(tmp_path: Path) -> Workspace:
+def sample_workspace(tmp_path: Path) -> Context:
     assert SAMPLE_SCORE.exists(), f"Missing sample score: {SAMPLE_SCORE}"
-    work_dir = Workspace.init_from_score(
+    work_dir = Context.init_from_score(
         score_file=SAMPLE_SCORE,
         cwd=tmp_path,
     )
-    return Workspace(work_dir=work_dir)
+    return Context(work_dir=work_dir)
 
 
 @pytest.fixture(scope="session")
@@ -49,7 +55,7 @@ def mozart_fragment_score() -> Score:
     return normalize(load_score(MULTI_MOVEMENT_FRAGMENT))
 
 
-def test_export_midi(sample_workspace: Workspace) -> None:
+def test_export_midi(sample_workspace: Context) -> None:
     workspace = sample_workspace
     midi_path = workspace.export_midi()
     assert midi_path.exists()
@@ -59,7 +65,7 @@ def test_export_midi(sample_workspace: Workspace) -> None:
     assert any(midi_versions.glob(f"{midi_path.stem}_v*.mid"))
 
 
-def test_create_excerpt(sample_workspace: Workspace) -> None:
+def test_create_excerpt(sample_workspace: Context) -> None:
     workspace = sample_workspace
     score = workspace._master_score()
     part_token, measure, _ = _first_notated_span(score)
@@ -71,7 +77,7 @@ def test_create_excerpt(sample_workspace: Workspace) -> None:
     assert excerpt_path.exists()
 
 
-def test_merge_excerpt(sample_workspace: Workspace) -> None:
+def test_merge_excerpt(sample_workspace: Context) -> None:
     workspace = sample_workspace
     score = workspace._master_score()
     part_token, measure, original_pitch = _first_notated_span(score)
@@ -103,7 +109,7 @@ def test_merge_excerpt(sample_workspace: Workspace) -> None:
     assert any(versions_dir.glob(f"{master_stem}_v*.krn"))
 
 
-def test_remove(sample_workspace: Workspace) -> None:
+def test_remove(sample_workspace: Context) -> None:
     workspace = sample_workspace
     workspace.delete_measures("2", mode="blank")
     score = workspace._master_score()
@@ -113,7 +119,7 @@ def test_remove(sample_workspace: Workspace) -> None:
     assert rests and all(r.isRest for r in rests)
 
 
-def test_expand(sample_workspace: Workspace) -> None:
+def test_expand(sample_workspace: Context) -> None:
     workspace = sample_workspace
     workspace.expand_master(at=1, count=1)
     score = workspace._master_score()
@@ -123,7 +129,7 @@ def test_expand(sample_workspace: Workspace) -> None:
     assert rests and all(r.isRest for r in rests)
 
 
-def test_spec(sample_workspace: Workspace) -> None:
+def test_spec(sample_workspace: Context) -> None:
     workspace = sample_workspace
     spec = workspace.score_spec()
     assert isinstance(spec, ScoreSpec)
@@ -133,7 +139,7 @@ def test_spec(sample_workspace: Workspace) -> None:
 
 
 def test_spec_multimovement(
-    sample_workspace: Workspace, mozart_fragment_score: Score
+    sample_workspace: Context, mozart_fragment_score: Score
 ) -> None:
     spec = sample_workspace._build_spec(mozart_fragment_score)
     assert len(spec.parts) >= 10
@@ -142,14 +148,14 @@ def test_spec_multimovement(
     assert len(spec.key_signatures) > 1
 
 
-def test_normalized_ids(sample_workspace: Workspace) -> None:
+def test_normalized_ids(sample_workspace: Context) -> None:
     score = sample_workspace._master_score()
     ids = [p.id for p in score.parts]
     assert len(set(ids)) == len(ids)
     assert all(isinstance(pid, str) and not pid.isdigit() for pid in ids)
 
 
-def test_import_score(sample_workspace: Workspace) -> None:
+def test_import_score(sample_workspace: Context) -> None:
     workspace = sample_workspace
     assert ALT_SAMPLE_SCORE.exists(), f"Missing alt sample: {ALT_SAMPLE_SCORE}"
     target = workspace.import_score(score_file=ALT_SAMPLE_SCORE)
@@ -162,7 +168,7 @@ def test_import_score(sample_workspace: Workspace) -> None:
     assert spec.parts
 
 
-def test_change_master(sample_workspace: Workspace) -> None:
+def test_change_master(sample_workspace: Context) -> None:
     workspace = sample_workspace
     assert ALT_SAMPLE_SCORE.exists(), f"Missing alt sample: {ALT_SAMPLE_SCORE}"
     new_score = workspace.import_score(score_file=ALT_SAMPLE_SCORE)
