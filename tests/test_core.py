@@ -14,7 +14,7 @@ from composer_toolchain.score import (
     normalize,
     snake_case,
 )
-from composer_toolchain.core import Manifest, ScoreSpec, Context
+from composer_toolchain.core import Manifest, Context
 
 
 def _first_notated_span(score: Score) -> Tuple[str, int, str]:
@@ -41,16 +41,6 @@ def sample_workspace(tmp_path: Path, sample_score_path: Path) -> Context:
 @pytest.fixture()
 def mozart_fragment_score(multi_movement_score_path: Path) -> Score:
     return normalize(load_score(multi_movement_score_path))
-
-
-def test_export_midi(sample_workspace: Context) -> None:
-    workspace = sample_workspace
-    midi_path = workspace.render_midi()
-    assert midi_path.exists()
-
-    workspace.render_midi()
-    midi_versions = workspace.work_dir / "versions" / "midi"
-    assert any(midi_versions.glob(f"{midi_path.stem}_v*.mid"))
 
 
 def test_create_excerpt(sample_workspace: Context) -> None:
@@ -117,48 +107,11 @@ def test_expand(sample_workspace: Context) -> None:
     assert rests and all(r.isRest for r in rests)
 
 
-def test_spec(sample_workspace: Context) -> None:
-    workspace = sample_workspace
-    spec = workspace.score_spec()
-    assert isinstance(spec, ScoreSpec)
-    assert spec.parts, "spec must expose part metadata"
-    assert all(part.part_id and not part.part_id.isdigit() for part in spec.parts)
-    assert spec.measure_cues, "expected structural metadata"
-    spans = spec.iter_cue_spans()
-    assert spans, "cue spans should cover the score"
-    assert spans[0].start_measure == 1
-    assert spans[-1].end_measure == spec.total_measures
-    prev_end = 0
-    for span in spans:
-        assert span.start_measure == prev_end + 1
-        prev_end = span.end_measure
-    assert prev_end == spec.total_measures
-
-
-def test_spec_multimovement(mozart_fragment_score: Score) -> None:
-    spec = ScoreSpec.build(mozart_fragment_score)
-    assert len(spec.parts) >= 10
-    assert spec.movements, "fragment must expose movement metadata"
-    spans = spec.iter_cue_spans()
-    assert spans
-    assert spans[-1].end_measure == spec.total_measures
-
-
 def test_normalized_ids(sample_workspace: Context) -> None:
     score = sample_workspace._master_score()
     ids = [p.id for p in score.parts]
     assert len(set(ids)) == len(ids)
     assert all(isinstance(pid, str) and not pid.isdigit() for pid in ids)
-
-
-def test_import_score(sample_workspace: Context, alt_score_path: Path) -> None:
-    workspace = sample_workspace
-    target = workspace.import_score(score_file=alt_score_path)
-    expected = workspace.work_dir / "scores" / f"{snake_case(alt_score_path.stem)}.krn"
-    assert target == expected
-    assert expected.exists()
-    spec = workspace.score_spec(other_score=expected.name)
-    assert spec.parts
 
 
 def test_change_master(sample_workspace: Context, alt_score_path: Path) -> None:

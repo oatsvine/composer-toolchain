@@ -10,21 +10,24 @@ from CLI interfaces and higher-level application logic.
 """
 
 from pathlib import Path
-from typing import Dict, Literal, Optional, Sequence, Tuple
+from typing import Literal, Optional, Sequence
 
 from loguru import logger
-from music21.humdrum.spineParser import GlobalComment
-from music21.key import KeySignature
-from music21.meter.base import TimeSignature
 from music21.stream import Score
 from music21.stream.base import Measure, Part
-from music21.tempo import MetronomeMark
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 
-from composer_toolchain.score import (MeasureSpec, PartSpec, create_excerpt,
-                                      delete_measures, insert_blank_measures,
-                                      load_score, merge_excerpt, normalize,
-                                      snake_case)
+from composer_toolchain.score import (
+    MeasureSpec,
+    PartSpec,
+    create_excerpt,
+    delete_measures,
+    insert_blank_measures,
+    load_score,
+    merge_excerpt,
+    normalize,
+    snake_case,
+)
 
 
 class Manifest(BaseModel):
@@ -33,8 +36,6 @@ class Manifest(BaseModel):
 
 class WorkspaceMeta(Manifest):
     work_dir: Path
-
-
 
 
 WORKSPACE_DIRS = Literal["scores", "excerpts", "midi", "versions", "sketches"]
@@ -144,7 +145,6 @@ class Context:
         manifest = Manifest(master=score_file.name)
         manifest_file.write_text(manifest.model_dump_json(indent=2))
         logger.success("Changed master to: {}", score_file.relative_to(self.work_dir))
-
 
     # NOTE: For all operations in the workspace, the target is always implicitely the master score by convention (no optionality or ad-hoc configuraiton).
     def _save_master(self, score: Score, suffix: str = ".krn") -> Optional[Path]:

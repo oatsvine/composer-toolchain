@@ -5,164 +5,24 @@ import shutil
 from pathlib import Path
 from typing import Literal, Optional
 
-from rich.table import Table
 import typer
 from loguru import logger
 from music21.humdrum.spineParser import GlobalComment
-from music21.stream import Measure
-from rich.panel import Panel
 from typing_extensions import Annotated
 
-import questionary
-from questionary import Choice
 
 from composer_toolchain.cli_helpers import (
     choose_score,
     console,
-    render_measure_landmarks,
-    render_score_metadata,
 )
-from composer_toolchain.core import Context, ScoreSpec
-from composer_toolchain.score import MeasureSpec, PartSpec, load_score, normalize
-from composer_toolchain.segmentation import segmentation_app
-from composer_toolchain.sketch import sketch_app
+from composer_toolchain.core import Context
+from composer_toolchain.score import MeasureSpec, PartSpec
 
 # Refactor to use environment variable later.
 SCORES_CORPUS_DIR = Path("/data/workspace/in/mxl")
 MIDI_EXPORT_DIR = Path("/data/workspace/out/midi")
 
 app = typer.Typer()
-app.add_typer(segmentation_app)
-app.add_typer(sketch_app)
-
-
-def _prompt_required_text(message: str, *, default: Optional[str] = None) -> str:
-    """Prompt the user for a non-empty text value using questionary."""
-
-    default_text = default or ""
-    while True:
-        reply = questionary.text(message, default=default_text).unsafe_ask()
-        value = (reply or "").strip()
-        if value:
-            return value
-        console.print("[red]A value is required.[/red]")
-        default_text = ""
-
-
-def _interactive_source_filename(
-    workspace: Context, master_file: Path, provided: Optional[str]
-) -> str:
-    """Resolve the source score filename via questionary menus and chooser."""
-
-    scores_dir = workspace.subdir("scores")
-    master_name = master_file.name
-
-    if provided:
-        candidate = provided
-    else:
-        console.print(
-            Panel(
-                f"Master score: [bold]scores/{master_name}[/bold]\n"
-                "Choose how to source the excerpt.",
-                title="Source selection",
-                border_style="green",
-            )
-        )
-        action = questionary.select(
-            "Select excerpt source",
-            choices=[
-                Choice(title=f"Use master ({master_name})", value="master"),
-                Choice(title="Select another workspace score", value="workspace"),
-                Choice(title="Import from corpus before excerpting", value="import"),
-            ],
-            default="master",
-        ).unsafe_ask()
-        if action == "master":
-            candidate = master_name
-        elif action == "workspace":
-            selected = choose_score(scores_dir, filter_suffix={".krn"})
-            candidate = selected.name
-        else:
-            console.print(
-                Panel(
-                    "Choose a corpus score to import (sk opens next).",
-                    border_style="cyan",
-                )
-            )
-            external = choose_score(SCORES_CORPUS_DIR)
-            imported = workspace.import_score(score_file=external)
-            console.print(
-                f"[green]Imported[/green] {external.name} → {imported.relative_to(workspace.work_dir)}"
-            )
-            candidate = imported.name
-
-    source_path = scores_dir / candidate
-    if not source_path.exists():
-        raise typer.BadParameter(
-            f"Score not found under scores/: {candidate}",
-            param_hint="filename",
-        )
-    return candidate
-
-
-def _multiselect_parts(
-    spec: ScoreSpec, *, default_ids: Optional[set[str]] = None
-) -> list[str]:
-    default_ids = default_ids or {part.part_id for part in spec.parts}
-    while True:
-        choices: list[Choice] = []
-        for part in spec.parts:
-            label = part.name
-            if part.abbreviation and part.abbreviation != part.name:
-                label = f"{label} ({part.abbreviation})"
-            instrument = part.instrument or "–"
-            title = f"{label} · {instrument} [{part.part_id}]"
-            choices.append(
-                Choice(
-                    title=title, value=part.part_id, checked=part.part_id in default_ids
-                )
-            )
-        selected = questionary.checkbox(
-            "Select parts for the excerpt",
-            choices=choices,
-            instruction="↑/↓ move · Space toggle · 'a' toggles all · Enter accept",
-        ).unsafe_ask()
-        if selected:
-            return selected
-        console.print("[red]Select at least one part.[/red]")
-        default_ids = {part.part_id for part in spec.parts}
-
-
-def _interactive_part_selection(
-    spec: ScoreSpec, preset_ids: Optional[list[str]]
-) -> list[str]:
-    if preset_ids:
-        preset_label = ", ".join(preset_ids)
-        reuse = questionary.confirm(
-            f"Use provided part list? {preset_label}", default=True
-        ).unsafe_ask()
-        if reuse:
-            return preset_ids
-        console.print("[cyan]Adjust selection below.[/cyan]")
-    return _multiselect_parts(spec, default_ids=None)
-
-
-def _interactive_measure_spec(spec: ScoreSpec, preset: Optional[str]) -> str:
-    render_measure_landmarks(spec)
-    if preset:
-        preset_clean = preset.strip()
-        reuse = questionary.confirm(
-            f"Use existing measure spec? {preset_clean}", default=True
-        ).unsafe_ask()
-        if reuse:
-            return preset_clean
-        console.print(
-            "[cyan]Enter new measure spans informed by the landmarks above.[/cyan]"
-        )
-    return _prompt_required_text(
-        "Measure ranges (e.g. '5-12,18'; use ascending spans per MeasureSpec)",
-        default=preset.strip() if preset else None,
-    )
 
 
 @app.command()
@@ -311,7 +171,7 @@ def create_excerpt(
         ),
     ] = Path.cwd(),
     parts: Annotated[
-        Optional[str],
+        str,
         typer.Option(
             "--parts",
             help=(
@@ -319,9 +179,9 @@ def create_excerpt(
                 "(matches PartSpec tokens such as 'flute,vn1')."
             ),
         ),
-    ] = None,
+    ],
     measures: Annotated[
-        Optional[str],
+        str,
         typer.Option(
             "--measures",
             help=(
@@ -329,7 +189,7 @@ def create_excerpt(
                 "grammar with ascending, comma-separated spans."
             ),
         ),
-    ] = None,
+    ],
     filename: Annotated[
         Optional[str],
         typer.Option(
@@ -348,15 +208,6 @@ def create_excerpt(
             ),
         ),
     ] = None,
-    non_interactive: Annotated[
-        bool,
-        typer.Option(
-            help=(
-                "Skip Rich prompts (automation mode). Requires --parts/--measures "
-                "and falls back to the master score when --filename is omitted."
-            ),
-        ),
-    ] = False,
 ) -> Path:
     """Slice an excerpt from a workspace score with Rich-guided prompts.
 
@@ -376,60 +227,15 @@ def create_excerpt(
     workspace = Context(work_dir=work_dir)
     master_file = workspace._master_file()
     master_name = master_file.name
-
-    provided_parts = parts.strip() if parts else None
-    provided_measures = measures.strip() if measures else None
-
-    provided_part_ids: Optional[list[str]] = None
-    if provided_parts:
-        try:
-            provided_part_ids = PartSpec(tokens=provided_parts).ids
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc), param_hint="parts") from exc
-
-    if non_interactive:
-        if not provided_parts:
-            raise typer.BadParameter(
-                "--parts is required when using --non-interactive.",
-                param_hint="parts",
-            )
-        if not provided_measures:
-            raise typer.BadParameter(
-                "--measures is required when using --non-interactive.",
-                param_hint="measures",
-            )
-        parts_value = provided_parts
-        measures_value = provided_measures
-        source_name = filename.strip() if filename else master_name
-    else:
-        source_name = _interactive_source_filename(
-            workspace=workspace,
-            master_file=master_file,
-            provided=filename.strip() if filename else None,
-        )
-
-        try:
-            spec = workspace.score_spec(
-                None if source_name == master_name else source_name
-            )
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc), param_hint="filename") from exc
-
-        label = f"scores/{source_name}"
-        if source_name == master_name:
-            label = f"master (scores/{source_name})"
-        render_score_metadata(spec, source_label=label)
-        selected_ids = _interactive_part_selection(spec, provided_part_ids)
-        parts_value = ",".join(selected_ids)
-        measures_value = _interactive_measure_spec(spec, provided_measures)
+    source_name = filename.strip() if filename else master_name
 
     try:
-        part_spec = PartSpec(tokens=parts_value)
+        part_spec = PartSpec(tokens=parts.strip())
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="parts") from exc
 
     try:
-        measure_spec = MeasureSpec(spec=measures_value)
+        measure_spec = MeasureSpec(spec=measures.strip())
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="measures") from exc
 
@@ -552,89 +358,6 @@ def expand(
     workspace = Context(work_dir=work_dir)
     workspace.expand_master(at=at, count=count)
     console.print(f"[yellow]Inserted blank measures[/yellow]: {count} @ {at}")
-
-
-@app.command()
-def info(
-    work_dir: Annotated[
-        Path,
-        typer.Argument(
-            help="Workspace root directory.",
-            exists=True,
-            file_okay=False,
-            resolve_path=True,
-        ),
-    ] = Path.cwd(),
-    other_score: Annotated[
-        Optional[Path],
-        typer.Option(
-            help="Alternate workspace score (under scores/) to inspect.",
-            resolve_path=True,
-        ),
-    ] = None,
-) -> None:
-    """Render workspace and score metadata via Rich tables."""
-    client = Context(work_dir=work_dir)
-
-    if other_score is None:
-        score_path = client._master_file()
-        score = client._master_score()
-    else:
-        scores_dir = work_dir / "scores"
-        candidate = (
-            other_score if other_score.is_absolute() else scores_dir / other_score
-        )
-        candidate = candidate.resolve()
-        if not candidate.exists():
-            raise typer.BadParameter(f"Score not found: {candidate}")
-        if not candidate.is_relative_to(scores_dir):
-            raise typer.BadParameter(f"Score must reside within {scores_dir}")
-        score_path = candidate
-        score = normalize(load_score(score_path))
-
-    spec = ScoreSpec.build(score)
-    try:
-        display_master = score_path.relative_to(work_dir)
-    except ValueError:
-        display_master = score_path
-
-    workspace_panel = Table.grid(padding=(0, 2))
-    workspace_panel.add_row("Master", str(display_master))
-    workspace_panel.add_row("Duration (QL)", f"{score.highestTime:.2f}")
-    console.print(Panel(workspace_panel, title="Workspace", expand=True))
-    render_score_metadata(spec, source_label=str(display_master))
-
-    parts_table = Table(title="Parts", header_style="bold")
-    parts_table.add_column("ID", style="cyan")
-    parts_table.add_column("Name")
-    parts_table.add_column("Measures", justify="right")
-    parts_table.add_column("Instrument")
-    for part, payload in zip(score.parts, spec.parts, strict=True):
-        measure_numbers = [
-            int(measure.number)
-            for measure in part.getElementsByClass(Measure)
-            if measure.number is not None
-        ]
-        measure_total = max(measure_numbers) if measure_numbers else 0
-        parts_table.add_row(
-            payload.part_id,
-            payload.name,
-            f"{measure_total}",
-            payload.instrument or "-",
-        )
-    console.print(parts_table)
-    render_measure_landmarks(spec)
-
-    comment_table = Table(title="Global Comments", header_style="bold cyan")
-    comment_table.add_column("Measure", style="green")
-    comment_table.add_column("Comment")
-    if spec.comments:
-        for (measure_idx, _), text in sorted(spec.comments.items()):
-            measure_label = f"m{measure_idx}" if measure_idx else "-"
-            comment_table.add_row(measure_label, text)
-    else:
-        comment_table.add_row("-", "No global comments")
-    console.print(comment_table)
 
 
 @app.command()
