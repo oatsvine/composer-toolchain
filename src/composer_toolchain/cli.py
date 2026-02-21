@@ -2,74 +2,36 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
-from textwrap import shorten
-from typing import Literal, Optional, Set
+from typing import Literal, Optional
 
 import typer
 from loguru import logger
 from music21.humdrum.spineParser import GlobalComment
 from music21.stream import Measure
-from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 from typing_extensions import Annotated
 
 import questionary
 from questionary import Choice
 
-from composer_toolchain.score import MeasureSpec, PartSpec, load_score, normalize
-from composer_toolchain.core import Context, ScoreSpec
-from composer_toolchain.segmentation import (
-    DEFAULT_SEGMENTATION_MODEL,
-    SegmentationContext,
-    SegmentLabel,
-    analyze_segmentation as run_segmentation,
+from composer_toolchain.cli_helpers import (
+    choose_score,
+    console,
+    render_measure_landmarks,
+    render_score_metadata,
 )
+from composer_toolchain.core import Context, ScoreSpec
+from composer_toolchain.score import MeasureSpec, PartSpec, load_score, normalize
+from composer_toolchain.segmentation import segmentation_app
+from composer_toolchain.sketch import sketch_app
 
 # Refactor to use environment variable later.
 SCORES_CORPUS_DIR = Path("/data/workspace/in/mxl")
 
-console = Console()
 app = typer.Typer()
-
-
-def choose_score(
-    src_dir: Path, filter_suffix: Set[str] = {".mxl", ".xml", ".krn"}
-) -> Path:
-    """
-    Prompt the user to select a score inside `src_dir`.
-
-    This interractive chooser improves ergonomics in CLI workflows by quickly
-    letting the user pick scores or excerpts from workspace directories.
-
-    Using `sk` (skim) because it works but any fuzzy finder would do.
-    """
-    scores = [p for p in src_dir.glob("*.*") if p.suffix in filter_suffix]
-    if not scores:
-        raise ValueError(f"No files with suffix {filter_suffix} in {src_dir}")
-    choices = [candidate.name for candidate in scores]
-    try:
-        result = subprocess.run(
-            ["sk"],
-            input="\n".join(choices),
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            "sk executable not found; install sk to use interactive selection."
-        ) from exc
-
-    filename = result.stdout.strip()
-    if not filename:
-        raise ValueError("No score selected.")
-    score_file = src_dir / filename
-    if not score_file.exists():
-        raise FileNotFoundError(f"Selected file does not exist: {score_file}")
-    return score_file.resolve()
+app.add_typer(segmentation_app)
+app.add_typer(sketch_app)
 
 
 def _prompt_required_text(message: str, *, default: Optional[str] = None) -> str:
@@ -141,115 +103,6 @@ def _interactive_source_filename(
     return candidate
 
 
-def _render_score_metadata(spec: ScoreSpec, *, source_label: str) -> None:
-    """Print high-level metadata so the composer sees the formal context."""
-
-    table = Table(
-        title=f"Score Overview · {source_label}",
-        show_header=False,
-        box=None,
-    )
-    table.add_row("Title", spec.title)
-    if spec.composer:
-        table.add_row("Composer", spec.composer)
-    primary = spec.primary_movement()
-    if primary and (primary.number is not None or primary.title):
-        bits: list[str] = []
-        if primary.number is not None:
-            bits.append(f"No. {primary.number}")
-        if primary.title:
-            bits.append(primary.title)
-        table.add_row("Movement", " · ".join(bits))
-    if spec.movements:
-        labels: list[str] = []
-        for entry in spec.movements:
-            label_bits: list[str] = []
-            if entry.number is not None:
-                label_bits.append(str(entry.number))
-            if entry.title:
-                label_bits.append(entry.title)
-            if label_bits:
-                labels.append(
-                    ": ".join(label_bits) if len(label_bits) > 1 else label_bits[0]
-                )
-        if labels:
-            table.add_row("Movements", ", ".join(labels))
-    table.add_row("Parts", str(len(spec.parts)))
-    if spec.total_measures:
-        table.add_row("Length", f"{spec.total_measures} measures")
-    console.print(table)
-
-
-def _render_measure_landmarks(spec: ScoreSpec) -> None:
-    rows = spec.iter_cue_spans()
-    if not rows:
-        return
-    table = Table(
-        title="Structural Landmarks (changes in meter/key/tempo)",
-        header_style="bold cyan",
-        show_lines=False,
-        expand=False,
-    )
-    table.add_column("Measures", style="yellow", no_wrap=True)
-    table.add_column("Time Sig", style="magenta")
-    table.add_column("Key", style="green")
-    table.add_column("Tempo", style="cyan")
-    for cue in rows:
-        if cue.start_measure == cue.end_measure:
-            measure_label = str(cue.start_measure)
-        else:
-            measure_label = f"{cue.start_measure}-{cue.end_measure}"
-        table.add_row(
-            measure_label,
-            cue.time_signature or "–",
-            cue.key_signature or "–",
-            f"{cue.tempo_bpm} bpm" if cue.tempo_bpm else "–",
-        )
-    console.print(table)
-
-
-def _render_segmentation_overview(overview: str) -> None:
-    summary = overview.strip()
-    if not summary:
-        return
-    console.print(Panel(summary, title="Segmentation Overview", border_style="magenta"))
-
-
-def _render_segmentation_segments(segments: list[SegmentLabel]) -> None:
-    if not segments:
-        return
-    table = Table(title="Segments", header_style="bold magenta")
-    table.add_column("Measures", style="yellow", no_wrap=True)
-    table.add_column("Level", style="cyan", no_wrap=True)
-    table.add_column("Name")
-    table.add_column("Suffix", style="green", no_wrap=True)
-    table.add_column("Rationale")
-    for seg in segments:
-        measures = (
-            str(seg.measure_start)
-            if seg.measure_start == seg.measure_end
-            else f"{seg.measure_start}-{seg.measure_end}"
-        )
-        table.add_row(
-            measures,
-            seg.level.value,
-            seg.name,
-            seg.suffix,
-            shorten(seg.reasoning, width=80, placeholder="…"),
-        )
-    console.print(table)
-
-
-def _write_segmentation_file(source: Path, annotated_text: str) -> Path:
-    candidate = source.with_name(f"{source.stem}_segmentation{source.suffix}")
-    counter = 1
-    while candidate.exists():
-        candidate = source.with_name(f"{source.stem}_segmentation_{counter}{source.suffix}")
-        counter += 1
-    candidate.write_text(annotated_text, encoding="utf-8")
-    return candidate
-
-
 def _multiselect_parts(
     spec: ScoreSpec, *, default_ids: Optional[set[str]] = None
 ) -> list[str]:
@@ -293,7 +146,7 @@ def _interactive_part_selection(
 
 
 def _interactive_measure_spec(spec: ScoreSpec, preset: Optional[str]) -> str:
-    _render_measure_landmarks(spec)
+    render_measure_landmarks(spec)
     if preset:
         preset_clean = preset.strip()
         reuse = questionary.confirm(
@@ -550,7 +403,7 @@ def create_excerpt(
         label = f"scores/{source_name}"
         if source_name == master_name:
             label = f"master (scores/{source_name})"
-        _render_score_metadata(spec, source_label=label)
+        render_score_metadata(spec, source_label=label)
         selected_ids = _interactive_part_selection(spec, provided_part_ids)
         parts_value = ",".join(selected_ids)
         measures_value = _interactive_measure_spec(spec, provided_measures)
@@ -577,70 +430,6 @@ def create_excerpt(
         f"[green]Excerpt created[/green]: {excerpt_file.relative_to(work_dir)}"
     )
     return excerpt_file
-
-
-@app.command()
-def analyze_segmentation(
-    work_dir: Annotated[
-        Path,
-        typer.Argument(
-            help="Workspace root directory (initialized via init-with-score).",
-            exists=True,
-            file_okay=False,
-            resolve_path=True,
-        ),
-    ] = Path.cwd(),
-    filename: Annotated[
-        Optional[str],
-        typer.Option(
-            help="Excerpt filename under excerpts/ to analyze; omit for interactive chooser.",
-        ),
-    ] = None,
-    model: Annotated[
-        str,
-        typer.Option(
-            help="OpenAI reasoning model (requires OPENAI_API_KEY).",
-        ),
-    ] = DEFAULT_SEGMENTATION_MODEL,
-) -> Path:
-    """Run OpenAI segmentation on an existing excerpt and emit annotated **kern."""
-
-    workspace = Context(work_dir=work_dir)
-    excerpts_dir = workspace.subdir("excerpts")
-    if filename:
-        candidate = excerpts_dir / Path(filename).name
-    else:
-        candidate = choose_score(excerpts_dir, filter_suffix={".krn"})
-    if not candidate.exists():
-        raise typer.BadParameter(f"Excerpt not found: {candidate}")
-
-    kern_text = candidate.read_text(encoding="utf-8")
-    score = normalize(load_score(candidate))
-    spec = ScoreSpec.build(score)
-    label = f"excerpts/{candidate.name}"
-    _render_score_metadata(spec, source_label=label)
-    _render_measure_landmarks(spec)
-
-    context = SegmentationContext(
-        spec=spec,
-        kern_text=kern_text,
-        excerpt_label=candidate.stem,
-    )
-    try:
-        result = run_segmentation(context=context, model=model)
-    except Exception as exc:  # pragma: no cover - defensive guard for OpenAI failures
-        console.print(f"[red]Segmentation failed:[/red] {exc}")
-        raise typer.Exit(code=1) from exc
-
-    target = _write_segmentation_file(candidate, result.annotated_kern)
-    _render_segmentation_overview(result.overview)
-    _render_segmentation_segments(result.segments)
-
-    rel = target.relative_to(work_dir)
-    console.print(
-        f"[green]Segmentation annotated[/green]: {rel} (model: {result.model})"
-    )
-    return target
 
 
 @app.command()
@@ -798,7 +587,7 @@ def info(
     workspace_panel.add_row("Master", str(display_master))
     workspace_panel.add_row("Duration (QL)", f"{score.highestTime:.2f}")
     console.print(Panel(workspace_panel, title="Workspace", expand=True))
-    _render_score_metadata(spec, source_label=str(display_master))
+    render_score_metadata(spec, source_label=str(display_master))
 
     parts_table = Table(title="Parts", header_style="bold")
     parts_table.add_column("ID", style="cyan")
@@ -819,7 +608,7 @@ def info(
             payload.instrument or "-",
         )
     console.print(parts_table)
-    _render_measure_landmarks(spec)
+    render_measure_landmarks(spec)
 
     comment_table = Table(title="Global Comments", header_style="bold cyan")
     comment_table.add_column("Measure", style="green")

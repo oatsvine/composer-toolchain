@@ -3,15 +3,27 @@
 from __future__ import annotations
 
 from enum import Enum
+from pathlib import Path
 from textwrap import dedent
-from typing import Callable, Iterable, Optional, Sequence
+from typing import Iterable, Optional, Sequence
 
+import typer
 from music21.humdrum.spineParser import GlobalComment
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from rich.panel import Panel
+from rich.table import Table
+from typing_extensions import Annotated
 
-from composer_toolchain.core import ScoreSpec
-from composer_toolchain.score import kern_to_score, snake_case
+from composer_toolchain.cli_helpers import (
+    choose_score,
+    console,
+    render_measure_landmarks,
+    render_score_metadata,
+)
+from composer_toolchain.core import Context, ScoreSpec
+from composer_toolchain.prompting import HUMDRUM_KERN_PRIMER
+from composer_toolchain.score import kern_to_score, load_score, normalize, snake_case
 
 
 DEFAULT_SEGMENTATION_MODEL = "gpt-5.1"
@@ -100,19 +112,14 @@ class SegmentationResult(SegmentationPayload):
     model: str
 
 
-LLMRunner = Callable[[SegmentationContext], SegmentationPayload]
-
-
 def analyze_segmentation(
     context: SegmentationContext,
     *,
     model: str = DEFAULT_SEGMENTATION_MODEL,
-    client: Optional[OpenAI] = None,
-    runner: Optional[LLMRunner] = None,
 ) -> SegmentationResult:
     """Run OpenAI-powered segmentation with validation and integrity checks."""
 
-    response = runner(context) if runner else _call_openai(context, model=model, client=client)
+    response = _call_openai(context, model=model)
     spec = context.spec
     segments = _validate_segment_ranges(response.segments, spec)
     _ensure_suffix_uniqueness(segments)
@@ -131,11 +138,10 @@ def _call_openai(
     context: SegmentationContext,
     *,
     model: str,
-    client: Optional[OpenAI] = None,
 ) -> SegmentationLLMResponse:
     """Invoke OpenAI Responses API with structured output parsing."""
 
-    client = client or OpenAI()
+    client = OpenAI()
     system_prompt = dedent(
         """
         You are a classical-form analyst steeped in Open Music Theory's “Foundational Concepts for Phrase-Level Forms.”
@@ -150,6 +156,7 @@ def _call_openai(
         Keep suffix suggestions snake_case so users can reuse them as excerpt filenames.
         """
     ).strip()
+    system_prompt = f"{system_prompt}\n\n{HUMDRUM_KERN_PRIMER}"
     user_prompt = _build_user_prompt(context)
     raw_response = client.responses.parse(  # type: ignore[attr-defined]
         model=model,
@@ -184,9 +191,9 @@ def _call_openai(
 
 def _build_user_prompt(context: SegmentationContext) -> str:
     spec = context.spec
-    metadata_lines = _score_metadata_lines(spec)
-    cue_lines = _cue_lines(spec)
-    first_measure = _first_measure(spec)
+    metadata_lines = spec.metadata_lines()
+    cue_lines = spec.cue_lines()
+    first_measure = spec.first_measure_number()
     last_measure = spec.total_measures
     requirements = dedent(
         f"""
@@ -212,53 +219,11 @@ def _build_user_prompt(context: SegmentationContext) -> str:
     return "\n\n".join(section for section in sections if section)
 
 
-def _score_metadata_lines(spec: ScoreSpec) -> list[str]:
-    lines: list[str] = [f"• Title: {spec.title}"]
-    if spec.composer:
-        lines.append(f"• Composer: {spec.composer}")
-    if spec.movements:
-        entries = []
-        for mv in spec.movements:
-            parts: list[str] = []
-            if mv.number is not None:
-                parts.append(str(mv.number))
-            if mv.title:
-                parts.append(mv.title)
-            if parts:
-                entries.append(" ".join(parts))
-        if entries:
-            lines.append(f"• Movements: {', '.join(entries)}")
-    part_listing = ", ".join(f"{p.part_id}:{p.name}" for p in spec.parts)
-    lines.append(f"• Parts: {part_listing}")
-    lines.append(f"• Total measures: {spec.total_measures}")
-    return lines
-
-
-def _cue_lines(spec: ScoreSpec) -> list[str]:
-    rows: list[str] = []
-    for span in spec.iter_cue_spans():
-        measure_label = (
-            str(span.start_measure)
-            if span.start_measure == span.end_measure
-            else f"{span.start_measure}-{span.end_measure}"
-        )
-        rows.append(
-            f"  · m{measure_label}: meter={span.time_signature or '—'}, key={span.key_signature or '—'}, tempo={span.tempo_bpm or '—'}"
-        )
-    return rows
-
-
-def _first_measure(spec: ScoreSpec) -> int:
-    if spec.measure_cues:
-        return min(spec.measure_cues)
-    return 1
-
-
 def _validate_segment_ranges(segments: Sequence[SegmentLabel], spec: ScoreSpec) -> list[SegmentLabel]:
     if not segments:
         raise ValueError("Segmentation response must include at least one segment")
     ordered = sorted(segments, key=lambda seg: (seg.measure_start, seg.measure_end))
-    first_measure = _first_measure(spec)
+    first_measure = spec.first_measure_number()
     last_measure = spec.total_measures
     if ordered[0].measure_start != first_measure:
         raise ValueError(
@@ -306,3 +271,122 @@ def _assert_segment_comments(score, segments: Sequence[SegmentLabel]) -> None:
         raise ValueError(
             f"Annotated kern missing SEGMENT comments for suffixes: {formatted}"
         )
+
+
+def _render_segmentation_overview(overview: str) -> None:
+    summary = overview.strip()
+    if not summary:
+        return
+    console.print(Panel(summary, title="Segmentation Overview", border_style="magenta"))
+
+
+def _render_segmentation_segments(segments: list[SegmentLabel]) -> None:
+    if not segments:
+        return
+    table = Table(title="Segments", header_style="bold magenta")
+    table.add_column("Measures", style="yellow", no_wrap=True)
+    table.add_column("Level", style="cyan", no_wrap=True)
+    table.add_column("Name")
+    table.add_column("Suffix", style="green", no_wrap=True)
+    table.add_column("Rationale")
+    for seg in segments:
+        measures = (
+            str(seg.measure_start)
+            if seg.measure_start == seg.measure_end
+            else f"{seg.measure_start}-{seg.measure_end}"
+        )
+        table.add_row(
+            measures,
+            seg.level.value,
+            seg.name,
+            seg.suffix,
+            seg.reasoning,
+        )
+    console.print(table)
+
+
+def _write_segmentation_file(source: Path, annotated_text: str) -> Path:
+    candidate = source.with_name(f"{source.stem}_segmentation{source.suffix}")
+    counter = 1
+    while candidate.exists():
+        candidate = source.with_name(f"{source.stem}_segmentation_{counter}{source.suffix}")
+        counter += 1
+    candidate.write_text(annotated_text, encoding="utf-8")
+    return candidate
+
+
+segmentation_app = typer.Typer(help="Segmentation workflows")
+
+
+@segmentation_app.command(name="analyze-segmentation")
+def analyze_segmentation_cli(
+    work_dir: Annotated[
+        Path,
+        typer.Argument(
+            help="Workspace root directory (initialized via init-with-score).",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path.cwd(),
+    filename: Annotated[
+        Optional[str],
+        typer.Option(
+            help="Excerpt filename under excerpts/ to analyze; omit for interactive chooser.",
+        ),
+    ] = None,
+    model: Annotated[
+        str,
+        typer.Option(
+            help="OpenAI reasoning model (requires OPENAI_API_KEY).",
+        ),
+    ] = DEFAULT_SEGMENTATION_MODEL,
+) -> Path:
+    """Run OpenAI segmentation on an existing excerpt and emit annotated **kern."""
+
+    workspace = Context(work_dir=work_dir)
+    excerpts_dir = workspace.subdir("excerpts")
+    if filename:
+        candidate = excerpts_dir / Path(filename).name
+    else:
+        candidate = choose_score(excerpts_dir, filter_suffix={".krn"})
+    if not candidate.exists():
+        raise typer.BadParameter(f"Excerpt not found: {candidate}")
+
+    kern_text = candidate.read_text(encoding="utf-8")
+    score = normalize(load_score(candidate))
+    spec = ScoreSpec.build(score)
+    label = f"excerpts/{candidate.name}"
+    render_score_metadata(spec, source_label=label)
+    render_measure_landmarks(spec)
+
+    context = SegmentationContext(
+        spec=spec,
+        kern_text=kern_text,
+        excerpt_label=candidate.stem,
+    )
+    try:
+        result = analyze_segmentation(context=context, model=model)
+    except Exception as exc:  # pragma: no cover - defensive guard for OpenAI failures
+        console.print(f"[red]Segmentation failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    target = _write_segmentation_file(candidate, result.annotated_kern)
+    _render_segmentation_overview(result.overview)
+    _render_segmentation_segments(result.segments)
+
+    rel = target.relative_to(work_dir)
+    console.print(
+        f"[green]Segmentation annotated[/green]: {rel} (model: {result.model})"
+    )
+    return target
+
+
+__all__ = [
+    "DEFAULT_SEGMENTATION_MODEL",
+    "SegmentLabel",
+    "SegmentationContext",
+    "SegmentationResult",
+    "analyze_segmentation",
+    "segmentation_app",
+]

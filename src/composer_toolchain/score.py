@@ -419,7 +419,7 @@ def _collect_global_comments(score: Score) -> list[dict[str, object]]:
     payload: list[dict[str, object]] = []
     for order, gc in enumerate(score.recurse().getElementsByClass(GlobalComment)):
         site_offset = float(gc.getOffsetBySite(score) or 0.0)
-        priority = getattr(gc, "priority", None)
+        priority = gc.priority if hasattr(gc, "priority") else None
         payload.append(
             {
                 "offset": site_offset,

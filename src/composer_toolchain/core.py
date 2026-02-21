@@ -142,6 +142,53 @@ class ScoreSpec(BaseModel):
 
         return self.movements[0] if self.movements else None
 
+    def metadata_lines(self) -> list[str]:
+        """Return bullet-style metadata lines for prompt contexts."""
+
+        lines: list[str] = [f"• Title: {self.title}"]
+        if self.composer:
+            lines.append(f"• Composer: {self.composer}")
+        if self.movements:
+            entries: list[str] = []
+            for mv in self.movements:
+                bits: list[str] = []
+                if mv.number is not None:
+                    bits.append(str(mv.number))
+                if mv.title:
+                    bits.append(mv.title)
+                if bits:
+                    entries.append(" ".join(bits))
+            if entries:
+                lines.append(f"• Movements: {', '.join(entries)}")
+        part_listing = ", ".join(f"{p.part_id}:{p.name}" for p in self.parts)
+        if part_listing:
+            lines.append(f"• Parts: {part_listing}")
+        lines.append(f"• Total measures: {self.total_measures}")
+        return lines
+
+    def cue_lines(self) -> list[str]:
+        """Return structural cue summaries for measure spans."""
+
+        rows: list[str] = []
+        for span in self.iter_cue_spans():
+            measure_label = (
+                str(span.start_measure)
+                if span.start_measure == span.end_measure
+                else f"{span.start_measure}-{span.end_measure}"
+            )
+            rows.append(
+                f"  · m{measure_label}: meter={span.time_signature or '—'}, "
+                f"key={span.key_signature or '—'}, tempo={span.tempo_bpm or '—'}"
+            )
+        return rows
+
+    def first_measure_number(self) -> int:
+        """Return the lowest numbered measure present in the score."""
+
+        if self.measure_cues:
+            return min(self.measure_cues)
+        return 1
+
     def iter_cue_spans(self) -> list[CueSpan]:
         """Return contiguous measure ranges where structural cues stay constant."""
 
@@ -215,11 +262,12 @@ class ScoreSpec(BaseModel):
             instrument_name: Optional[str] = None
             instrument = part.getInstrument(returnDefault=False)
             if instrument is not None:
-                instrument_name = (
-                    instrument.instrumentName
-                    or instrument.partName
-                    or getattr(instrument, "bestName", lambda: None)()
-                )
+                instrument_name = instrument.instrumentName or instrument.partName
+                if instrument_name is None:
+                    try:
+                        instrument_name = instrument.bestName()
+                    except AttributeError:
+                        instrument_name = None
             parts_payload.append(
                 PartInfo(
                     part_id=part_id,
@@ -304,12 +352,12 @@ class ScoreSpec(BaseModel):
         )
 
 
-WORKSPACE_DIRS = Literal["scores", "excerpts", "midi", "versions"]
+WORKSPACE_DIRS = Literal["scores", "excerpts", "midi", "versions", "sketches"]
 
 
 def init_workspace(work_dir: Path) -> None:
     """Initialize the workspace directory structure."""
-    for dirname in ["scores", "excerpts", "midi", "versions"]:
+    for dirname in ["scores", "excerpts", "midi", "versions", "sketches"]:
         subdir = work_dir / dirname
         subdir.mkdir(exist_ok=True, parents=True)
         logger.info(f"Initialized workspace subdirectory: {subdir}")
