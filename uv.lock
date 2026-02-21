@@ -328,7 +328,7 @@ dependencies = [
     { name = "typer" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "black" },
     { name = "pyright" },
@@ -341,35 +341,18 @@ mcp = [
     { name = "openai-agents" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "black" },
-    { name = "pyright" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-datadir" },
-]
-
 [package.metadata]
 requires-dist = [
     { name = "abctoolkit" },
     { name = "backoff" },
-    { name = "black", marker = "extra == 'dev'" },
     { name = "converter21" },
-    { name = "fastmcp", marker = "extra == 'mcp'" },
     { name = "loguru" },
     { name = "music21" },
-    { name = "openai-agents", marker = "extra == 'mcp'" },
     { name = "pydantic", specifier = ">=2.11.4" },
     { name = "pydub" },
-    { name = "pyright", marker = "extra == 'dev'" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'" },
-    { name = "pytest-datadir", marker = "extra == 'dev'" },
     { name = "rich" },
     { name = "typer" },
 ]
-provides-extras = ["mcp", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -378,6 +361,10 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-datadir" },
+]
+mcp = [
+    { name = "fastmcp" },
+    { name = "openai-agents" },
 ]
 
 [[package]]

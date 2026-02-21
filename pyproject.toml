@@ -23,7 +23,7 @@ dependencies = [
   "abctoolkit",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 mcp = [
   "openai-agents",
   "fastmcp",
@@ -36,23 +36,9 @@ dev = [
   "pyright",
 ]
 
-[dependency-groups]
-dev = [
-  "pytest",
-  "pytest-asyncio",
-  "pytest-datadir",
-  "black",
-  "pyright",
-]
-
 [tool.pyright]
 include = ["src", "tests"]
 exclude = ["**/node_modules", "**/__pycache__", "lib"]
-venvPath = "."
-venv = ".venv"
-extraPaths = [
-  ".venv/lib/python3.11/site-packages",
-]
 
 [tool.uv.pip]
 prerelease = "allow"

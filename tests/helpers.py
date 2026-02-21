@@ -28,7 +28,9 @@ def measure_fingerprint(m: Measure) -> List[tuple[float, str, float]]:
     return out
 
 
-def score_fingerprint(score: Score) -> Dict[tuple[int, int], List[tuple[float, str, float]]]:
+def score_fingerprint(
+    score: Score,
+) -> Dict[tuple[int, int], List[tuple[float, str, float]]]:
     """Map (part index, measure number) to fingerprints for quick equality checks."""
     fingerprints: Dict[tuple[int, int], List[tuple[float, str, float]]] = {}
     for pi, part in enumerate(score.parts):
@@ -95,7 +97,9 @@ def add_tie_across(part: Part, left_measure: int, right_measure: int) -> None:
         first.tie = Tie("stop")
 
 
-def add_structure(part: Part, measure_number: int, keysig_fifths: int = 0, clef: bool = True) -> None:
+def add_structure(
+    part: Part, measure_number: int, keysig_fifths: int = 0, clef: bool = True
+) -> None:
     """Insert clef/key/time structure at the start of a measure for assertions."""
     measure = part.measure(measure_number)
     if measure is None:
@@ -138,6 +142,7 @@ def build_ts_score(ts_sequence: list[str], n_parts: int = 2) -> Score:
             part.insert(offsets[idx - 1], measure)
         score.insert(0, part)
     return score
+
 
 __all__ = [
     "measure_fingerprint",

@@ -144,9 +144,7 @@ def test_normalized_ids(sample_workspace: Context) -> None:
 def test_import_score(sample_workspace: Context, alt_score_path: Path) -> None:
     workspace = sample_workspace
     target = workspace.import_score(score_file=alt_score_path)
-    expected = (
-        workspace.work_dir / "scores" / f"{snake_case(alt_score_path.stem)}.krn"
-    )
+    expected = workspace.work_dir / "scores" / f"{snake_case(alt_score_path.stem)}.krn"
     assert target == expected
     assert expected.exists()
     spec = workspace.score_spec(other_score=expected.name)

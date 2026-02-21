@@ -117,7 +117,8 @@ def corpus_scores(
     include_stress = bool(request.config.getoption("--stress", default=False))
     catalog = _corpus_catalog(corpus_root, include_stress)
     return {
-        key: deepcopy(_normalized_corpus_score_cached(path)) for key, path in catalog.items()
+        key: deepcopy(_normalized_corpus_score_cached(path))
+        for key, path in catalog.items()
     }
 
 
@@ -129,4 +130,6 @@ def raw_corpus_scores(
 
     include_stress = bool(request.config.getoption("--stress", default=False))
     catalog = _corpus_catalog(corpus_root, include_stress)
-    return {key: deepcopy(_raw_corpus_score_cached(path)) for key, path in catalog.items()}
+    return {
+        key: deepcopy(_raw_corpus_score_cached(path)) for key, path in catalog.items()
+    }

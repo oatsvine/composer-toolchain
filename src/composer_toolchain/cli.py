@@ -1,5 +1,4 @@
-"""Typer CLI interface to core toolchain.
-"""
+"""Typer CLI interface to core toolchain."""
 
 from __future__ import annotations
 

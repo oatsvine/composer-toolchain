@@ -3,7 +3,7 @@
 This module provides the `Context` class, which encapsulates operations
 for managing a musical score workspace. It includes functionality for
 importing scores, changing the master score, creating and merging excerpts,
-and exporting MIDI files. 
+and exporting MIDI files.
 
 All toolchain operations are encapsulated here to maintain a clean separation
 from CLI interfaces and higher-level application logic.
