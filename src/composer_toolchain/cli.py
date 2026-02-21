@@ -220,13 +220,19 @@ def create_excerpt(
             prompt=True,
         ),
     ] = "",
-    other_score: Annotated[
-        Optional[Path],
+    filename: Annotated[
+        Optional[str],
         typer.Option(
-            help="Alternate workspace score (under scores/) to carve from.",
+            help="Filename of score (under scores/) to carve from (defaults to current master).",
             resolve_path=True,
         ),
     ] = None,
+    non_interactive: Annotated[
+        bool,
+        typer.Option(
+            help="No interactive prompts; fail if arguments are missing.",
+        ),
+    ] = False,
 ) -> Path:
     """Extract a Humdrum excerpt from the master (or another workspace score)."""
     if not parts:
@@ -238,28 +244,10 @@ def create_excerpt(
     measure_spec = MeasureSpec(spec=measures)
 
     workspace = Context(work_dir=work_dir)
-
-    source_filename: Optional[str]
-    if other_score is not None:
-        scores_dir = work_dir / "scores"
-        candidate = (
-            other_score if other_score.is_absolute() else scores_dir / other_score
-        )
-        candidate = candidate.resolve()
-        if not candidate.exists():
-            raise typer.BadParameter(f"Other score not found: {candidate}")
-        try:
-            candidate.relative_to(scores_dir)
-        except ValueError:
-            raise typer.BadParameter(f"Score must reside within {scores_dir}") from None
-        source_filename = candidate.name
-    else:
-        source_filename = None
-
     excerpt_file = workspace.create_and_store_excerpt(
         part_spec=part_spec,
         measure_spec=measure_spec,
-        other_score=source_filename,
+        filename=filename,
     )
     console.print(
         f"[green]Excerpt created[/green]: {excerpt_file.relative_to(work_dir)}"

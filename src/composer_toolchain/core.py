@@ -376,14 +376,14 @@ class Context:
         self,
         part_spec: PartSpec,
         measure_spec: MeasureSpec,
-        other_score: Optional[str],
+        filename: Optional[str] = None,
     ) -> Path:
         """
         Create a Humdrum excerpt (kern subscore) and persist it under `excerpts/`.
         """
-        if other_score:
+        if filename:
             scores_dir = self.subdir("scores")
-            source = scores_dir / other_score
+            source = scores_dir / filename
             if not source.exists():
                 raise FileNotFoundError(f"Score file must exist in workspace: {source}")
             logger.info(

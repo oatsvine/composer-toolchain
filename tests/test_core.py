@@ -60,7 +60,7 @@ def test_create_excerpt(sample_workspace: Context) -> None:
     excerpt_path = workspace.create_and_store_excerpt(
         part_spec=PartSpec(tokens=part_token),
         measure_spec=MeasureSpec(spec=str(measure)),
-        other_score=None,
+        filename=None,
     )
     assert excerpt_path.exists()
 
@@ -73,7 +73,7 @@ def test_merge_excerpt(sample_workspace: Context) -> None:
     excerpt_path = workspace.create_and_store_excerpt(
         part_spec=PartSpec(tokens=part_token),
         measure_spec=MeasureSpec(spec=str(measure)),
-        other_score=None,
+        filename=None,
     )
     excerpt_score = load_score(excerpt_path)
     excerpt_measure = excerpt_score.parts[0].measure(measure)
