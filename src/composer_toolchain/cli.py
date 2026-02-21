@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from textwrap import shorten
 from typing import Literal, Optional, Set
 
 import typer
@@ -20,6 +21,12 @@ from questionary import Choice
 
 from composer_toolchain.score import MeasureSpec, PartSpec, load_score, normalize
 from composer_toolchain.core import Context, ScoreSpec
+from composer_toolchain.segmentation import (
+    DEFAULT_SEGMENTATION_MODEL,
+    SegmentationContext,
+    SegmentLabel,
+    analyze_segmentation as run_segmentation,
+)
 
 # Refactor to use environment variable later.
 SCORES_CORPUS_DIR = Path("/data/workspace/in/mxl")
@@ -199,6 +206,48 @@ def _render_measure_landmarks(spec: ScoreSpec) -> None:
             f"{cue.tempo_bpm} bpm" if cue.tempo_bpm else "–",
         )
     console.print(table)
+
+
+def _render_segmentation_overview(overview: str) -> None:
+    summary = overview.strip()
+    if not summary:
+        return
+    console.print(Panel(summary, title="Segmentation Overview", border_style="magenta"))
+
+
+def _render_segmentation_segments(segments: list[SegmentLabel]) -> None:
+    if not segments:
+        return
+    table = Table(title="Segments", header_style="bold magenta")
+    table.add_column("Measures", style="yellow", no_wrap=True)
+    table.add_column("Level", style="cyan", no_wrap=True)
+    table.add_column("Name")
+    table.add_column("Suffix", style="green", no_wrap=True)
+    table.add_column("Rationale")
+    for seg in segments:
+        measures = (
+            str(seg.measure_start)
+            if seg.measure_start == seg.measure_end
+            else f"{seg.measure_start}-{seg.measure_end}"
+        )
+        table.add_row(
+            measures,
+            seg.level.value,
+            seg.name,
+            seg.suffix,
+            shorten(seg.reasoning, width=80, placeholder="…"),
+        )
+    console.print(table)
+
+
+def _write_segmentation_file(source: Path, annotated_text: str) -> Path:
+    candidate = source.with_name(f"{source.stem}_segmentation{source.suffix}")
+    counter = 1
+    while candidate.exists():
+        candidate = source.with_name(f"{source.stem}_segmentation_{counter}{source.suffix}")
+        counter += 1
+    candidate.write_text(annotated_text, encoding="utf-8")
+    return candidate
 
 
 def _multiselect_parts(
@@ -422,6 +471,15 @@ def create_excerpt(
             ),
         ),
     ] = None,
+    suffix: Annotated[
+        Optional[str],
+        typer.Option(
+            help=(
+                "Optional suffix appended to the excerpt filename (snake_case)."
+                " Helps tag motives like 'antecedent_phrase'."
+            ),
+        ),
+    ] = None,
     non_interactive: Annotated[
         bool,
         typer.Option(
@@ -513,11 +571,76 @@ def create_excerpt(
         part_spec=part_spec,
         measure_spec=measure_spec,
         filename=source_override,
+        suffix=suffix.strip() if suffix else None,
     )
     console.print(
         f"[green]Excerpt created[/green]: {excerpt_file.relative_to(work_dir)}"
     )
     return excerpt_file
+
+
+@app.command()
+def analyze_segmentation(
+    work_dir: Annotated[
+        Path,
+        typer.Argument(
+            help="Workspace root directory (initialized via init-with-score).",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path.cwd(),
+    filename: Annotated[
+        Optional[str],
+        typer.Option(
+            help="Excerpt filename under excerpts/ to analyze; omit for interactive chooser.",
+        ),
+    ] = None,
+    model: Annotated[
+        str,
+        typer.Option(
+            help="OpenAI reasoning model (requires OPENAI_API_KEY).",
+        ),
+    ] = DEFAULT_SEGMENTATION_MODEL,
+) -> Path:
+    """Run OpenAI segmentation on an existing excerpt and emit annotated **kern."""
+
+    workspace = Context(work_dir=work_dir)
+    excerpts_dir = workspace.subdir("excerpts")
+    if filename:
+        candidate = excerpts_dir / Path(filename).name
+    else:
+        candidate = choose_score(excerpts_dir, filter_suffix={".krn"})
+    if not candidate.exists():
+        raise typer.BadParameter(f"Excerpt not found: {candidate}")
+
+    kern_text = candidate.read_text(encoding="utf-8")
+    score = normalize(load_score(candidate))
+    spec = ScoreSpec.build(score)
+    label = f"excerpts/{candidate.name}"
+    _render_score_metadata(spec, source_label=label)
+    _render_measure_landmarks(spec)
+
+    context = SegmentationContext(
+        spec=spec,
+        kern_text=kern_text,
+        excerpt_label=candidate.stem,
+    )
+    try:
+        result = run_segmentation(context=context, model=model)
+    except Exception as exc:  # pragma: no cover - defensive guard for OpenAI failures
+        console.print(f"[red]Segmentation failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    target = _write_segmentation_file(candidate, result.annotated_kern)
+    _render_segmentation_overview(result.overview)
+    _render_segmentation_segments(result.segments)
+
+    rel = target.relative_to(work_dir)
+    console.print(
+        f"[green]Segmentation annotated[/green]: {rel} (model: {result.model})"
+    )
+    return target
 
 
 @app.command()
@@ -675,6 +798,7 @@ def info(
     workspace_panel.add_row("Master", str(display_master))
     workspace_panel.add_row("Duration (QL)", f"{score.highestTime:.2f}")
     console.print(Panel(workspace_panel, title="Workspace", expand=True))
+    _render_score_metadata(spec, source_label=str(display_master))
 
     parts_table = Table(title="Parts", header_style="bold")
     parts_table.add_column("ID", style="cyan")
@@ -695,6 +819,7 @@ def info(
             payload.instrument or "-",
         )
     console.print(parts_table)
+    _render_measure_landmarks(spec)
 
     comment_table = Table(title="Global Comments", header_style="bold cyan")
     comment_table.add_column("Measure", style="green")

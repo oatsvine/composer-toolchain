@@ -477,9 +477,24 @@ class Context:
         part_spec: PartSpec,
         measure_spec: MeasureSpec,
         filename: Optional[str] = None,
+        suffix: Optional[str] = None,
     ) -> Path:
         """
         Create a Humdrum excerpt (kern subscore) and persist it under `excerpts/`.
+
+        Parameters
+        ----------
+        part_spec : PartSpec
+            Canonical part identifiers to extract.
+        measure_spec : MeasureSpec
+            Measure ranges to carve out of the source score.
+        filename : str | None
+            Optional workspace score (under scores/) to slice instead of the
+            current master.
+        suffix : str | None
+            Optional human label appended (snake_cased) to the excerpt filename
+            so later workflows (e.g., segmentation) can reference the excerpt
+            semantically ("motive_a", "antecedent_phrase").
         """
         if filename:
             scores_dir = self.subdir("scores")
@@ -500,6 +515,8 @@ class Context:
             f"{'_'.join(canonical_parts)}_"
             f"{snake_case(measure_spec.spec)}"
         )
+        if suffix:
+            stem = f"{stem}_{snake_case(suffix)}"
         excerpts_dir = self.subdir("excerpts")
         out_file = excerpts_dir / f"{stem}.krn"
         excerpt.write("humdrum", fp=out_file)

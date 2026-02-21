@@ -27,6 +27,9 @@ _CORPUS_LIBRARY: Dict[str, Path] = {
         "missa-pange-lingua-josquin-des-prez-missa-pange-lingua-kyrie.mxl.zip"
     ),
     "fugue_krn": Path("bwv891-fugue.krn"),
+    "mozart_mass_quitollis": Path(
+        "Mass_in_C_Minor_K.427417a_-_6._Qui_Tollis_by_Wolgang_Amadeus_Mozart.mxl"
+    ),
 }
 
 # DONE: Added `--stress` pytest option (register_stress_option) so corpus fixtures can include heavy scores on demand; validated in this session.
