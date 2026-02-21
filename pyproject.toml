@@ -1,0 +1,49 @@
+[project]
+name = "composer-toolchain"
+version = "0.1.0"
+description = "Set of score-centric tools for music composers."
+readme = "README.md"
+requires-python = ">=3.11"
+
+dependencies = [
+  "pydantic>=2.11.4",
+  "rich",
+  "typer",
+  "loguru",
+  "backoff",
+  "black",
+  "pyright",
+  "music21",
+  "converter21",
+  "pydub",
+  "abctoolkit",
+]
+
+[project.optional-dependencies]
+mcp = [
+  "openai-agents",
+  "fastmcp",
+]
+
+dev = [
+  "pytest",
+  "pytest-asyncio",
+]
+
+[tool.setuptools]
+packages = ["composer_toolchain", "tests"]
+
+[tool.pyright]
+include = ["composer_toolchain", "tests"]
+exclude = ["**/node_modules", "**/__pycache__", "lib"]
+
+[tool.uv.pip]
+prerelease = "allow"
+
+# [tool.uv.extra-build-dependencies]
+# pkuseg = ["numpy"]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]
