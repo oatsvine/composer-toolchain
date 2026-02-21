@@ -6,11 +6,13 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Optional
 
+import questionary
 import typer
 from music21.humdrum.spineParser import GlobalComment
 from music21.stream.base import Measure
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from questionary import Choice
 from rich.panel import Panel
 from typing_extensions import Annotated
 
@@ -21,7 +23,11 @@ from composer_toolchain.cli_helpers import (
     render_score_metadata,
 )
 from composer_toolchain.core import Context, ScoreSpec
-from composer_toolchain.prompting import HUMDRUM_KERN_PRIMER
+from composer_toolchain.prompting import (
+    HUMDRUM_KERN_PRIMER,
+    TECHNIQUE_PROMPTS,
+    technique_guidance,
+)
 from composer_toolchain.score import kern_to_score, load_score, normalize, snake_case
 
 
@@ -34,16 +40,15 @@ class SketchPayload(BaseModel):
 
     title: str = Field(description="Short title for the generated sketch")
     suffix: str = Field(
-        description=(
-            "Snake_case identifier appended to filenames inside the workspace"
-        )
+        description=("Snake_case identifier appended to filenames inside the workspace")
     )
     annotated_kern: str = Field(
         description="Complete **kern document containing !! SKETCH comments"
     )
     commentary: str = Field(
-        description="Composer-facing description of motivic/phrase-level plans"
+        description="Single concise sentence explaining how the sketch satisfies the brief"
     )
+    metrics: "SketchMetrics"
 
     @field_validator("title", "commentary", mode="after")
     @classmethod
@@ -83,6 +88,8 @@ class SketchContext(BaseModel):
     excerpt_label: str
     composer_brief: str
     measures: int = Field(ge=1, description="Exact measure count for the sketch")
+    target_parts: int = Field(ge=1, description="Exact number of **kern spines to output")
+    techniques: list[str] = Field(default_factory=list)
 
     @field_validator("composer_brief", mode="after")
     @classmethod
@@ -99,6 +106,11 @@ class SketchResult(SketchPayload):
     model: str
 
 
+class SketchMetrics(BaseModel):
+    measure_count: int = Field(ge=1)
+    part_count: int = Field(ge=1)
+
+
 def generate_sketch(
     context: SketchContext,
     *,
@@ -110,12 +122,15 @@ def generate_sketch(
     annotated_text = response.annotated_kern
     score = kern_to_score(annotated_text)
     _assert_measure_requirements(score, expected=context.measures)
+    _assert_part_requirements(score, expected=context.target_parts)
     _assert_sketch_comments(score)
+    _validate_sketch_metrics(response.metrics, context, score)
     return SketchResult(
         title=response.title,
         suffix=response.suffix,
         annotated_kern=annotated_text,
         commentary=response.commentary,
+        metrics=response.metrics,
         model=model,
     )
 
@@ -136,6 +151,7 @@ def _call_openai(
         Insert !! SKETCH|m<start>-m<end>|label|function commentary immediately before the barline (`=<number>`) that begins each motivic/idea span.
         Maintain the original instrumentation order and emulate its meter/key/tempo profile unless the composer brief explicitly overrides it.
         Return a fully formed **kern document; never truncate metadata, never omit *- terminators, and never echo the source excerpt verbatim.
+        Populate the `metrics` object so `measure_count` equals the measures you produced and `part_count` equals the number of **kern spines; if you cannot guarantee this, return no output.
         """
     ).strip()
     system_prompt = f"{system_prompt}\n\n{HUMDRUM_KERN_PRIMER}"
@@ -175,11 +191,12 @@ def _build_user_prompt(context: SketchContext) -> str:
     spec = context.spec
     cue_lines = spec.cue_lines()
     metadata_lines = spec.metadata_lines()
+    technique_block = technique_guidance(context.techniques)
     requirements = dedent(
         f"""
         Requirements:
         - Deliver a brand-new sketch spanning exactly {context.measures} numbered measures (start at measure 1, end at measure {context.measures}).
-        - Reuse the same number of **kern spines and part order shown in the reference excerpt so it can be merged later.
+        - Notate exactly {context.target_parts} parallel **kern spines; preserve existing part names when possible and label any new voices clearly.
         - Carry forward meter, key, and tempo cues from the score summary unless the composer brief overrides them.
         - Outline motive/idea/phrase labels in the !! SKETCH comments so orchestration or editing decisions can track each span.
         - Include dynamics or articulations only when they clarify phrase shaping; focus on harmonic rhythm, contrapuntal contour, and cadence types.
@@ -193,6 +210,7 @@ def _build_user_prompt(context: SketchContext) -> str:
         "\n".join(metadata_lines),
         "Structural cues (measure spans inclusive):",
         "\n".join(cue_lines) or "(No cues extracted)",
+        ("Technique brief:\n" + technique_block) if technique_block else "",
         f"Composer brief:\n{context.composer_brief}",
         requirements,
         context.kern_text,
@@ -219,6 +237,14 @@ def _assert_measure_requirements(score, expected: int) -> None:
         )
 
 
+def _assert_part_requirements(score, expected: int) -> None:
+    actual_parts = len(score.parts)
+    if actual_parts != expected:
+        raise ValueError(
+            f"Sketch must contain exactly {expected} parts/spines; got {actual_parts}"
+        )
+
+
 def _assert_sketch_comments(score) -> None:
     comments = [
         (gc.comment or "").strip()
@@ -227,6 +253,17 @@ def _assert_sketch_comments(score) -> None:
     ]
     if not comments:
         raise ValueError("Sketch must include !! SKETCH global comments")
+
+
+def _validate_sketch_metrics(metrics: SketchMetrics, context: SketchContext, score) -> None:
+    if metrics.measure_count != context.measures:
+        raise ValueError(
+            f"Sketch metrics mismatch: expected {context.measures} measures, got {metrics.measure_count}"
+        )
+    if metrics.part_count != context.target_parts:
+        raise ValueError(
+            f"Sketch metrics mismatch: expected {context.target_parts} parts, got {metrics.part_count}"
+        )
 
 
 def _write_sketch_file(sketch_dir: Path, stem: str, annotated_text: str) -> Path:
@@ -245,15 +282,6 @@ sketch_app = typer.Typer(help="Sketch generation workflows")
 
 @sketch_app.command(name="create-sketch")
 def create_sketch_cli(
-    work_dir: Annotated[
-        Path,
-        typer.Argument(
-            help="Workspace root directory (initialized via init-with-score).",
-            exists=True,
-            file_okay=False,
-            resolve_path=True,
-        ),
-    ] = Path.cwd(),
     filename: Annotated[
         Optional[str],
         typer.Option(
@@ -282,12 +310,36 @@ def create_sketch_cli(
             help="Exact length of the generated sketch in measures.",
         ),
     ] = 8,
+    parts: Annotated[
+        Optional[int],
+        typer.Option(
+            "--parts",
+            min=1,
+            help="Exact number of parts/voices in the generated sketch.",
+        ),
+    ] = None,
+    techniques: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--technique",
+            help="Technique lexicon entries (repeat flag to combine).",
+        ),
+    ] = None,
     model: Annotated[
         str,
         typer.Option(
             help="OpenAI reasoning model used for sketch generation.",
         ),
     ] = DEFAULT_SKETCH_MODEL,
+    work_dir: Annotated[
+        Path,
+        typer.Option(
+            help="Workspace root directory (initialized via init-with-score).",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ] = Path.cwd(),
 ) -> Path:
     """Generate a new **kern sketch guided by a composer brief."""
 
@@ -303,7 +355,7 @@ def create_sketch_cli(
     brief_text = instructions_file.read_text(encoding="utf-8").strip()
     if not brief_text:
         raise typer.BadParameter(
-            "Instructions file is empty", param_name="instructions_file"
+            "Instructions file is empty", param_hint="instructions_file"
         )
 
     kern_text = candidate.read_text(encoding="utf-8")
@@ -312,6 +364,8 @@ def create_sketch_cli(
     label = f"excerpts/{candidate.name}"
     render_score_metadata(spec, source_label=label)
     render_measure_landmarks(spec)
+    selected_techniques = _resolve_techniques(techniques)
+    target_parts = parts or len(spec.parts)
 
     context = SketchContext(
         spec=spec,
@@ -319,6 +373,8 @@ def create_sketch_cli(
         excerpt_label=candidate.stem,
         composer_brief=brief_text,
         measures=measures,
+        target_parts=target_parts,
+        techniques=selected_techniques,
     )
     try:
         result = generate_sketch(context=context, model=model)
@@ -331,9 +387,34 @@ def create_sketch_cli(
     target = _write_sketch_file(sketches_dir, stem, result.annotated_kern)
 
     console.print(Panel(result.commentary, title=result.title, border_style="green"))
+    console.print(
+        f"[blue]Metrics[/blue]: measures={result.metrics.measure_count} · parts={result.metrics.part_count}"
+    )
     rel = target.relative_to(work_dir)
     console.print(f"[green]Sketch stored[/green]: {rel} (model: {result.model})")
     return target
+
+
+def _resolve_techniques(preset: Optional[list[str]]) -> list[str]:
+    if preset:
+        return [_normalize_technique(name) for name in preset]
+    if not TECHNIQUE_PROMPTS:
+        return []
+    selected = questionary.checkbox(
+        "Select sketch techniques",
+        choices=[Choice(title=label.title(), value=label) for label in sorted(TECHNIQUE_PROMPTS)],
+        instruction="↑/↓ move · Space toggle · 'a' toggles all · Enter accept",
+    ).unsafe_ask()
+    return selected or []
+
+
+def _normalize_technique(name: str) -> str:
+    canonical = name.strip().lower()
+    if canonical not in TECHNIQUE_PROMPTS:
+        raise typer.BadParameter(
+            f"Unknown technique '{name}'. Choices: {', '.join(sorted(TECHNIQUE_PROMPTS))}"
+        )
+    return canonical
 
 
 __all__ = [

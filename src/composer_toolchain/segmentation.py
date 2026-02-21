@@ -7,10 +7,12 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Iterable, Optional, Sequence
 
+import questionary
 import typer
 from music21.humdrum.spineParser import GlobalComment
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from questionary import Choice
 from rich.panel import Panel
 from rich.table import Table
 from typing_extensions import Annotated
@@ -28,6 +30,28 @@ from composer_toolchain.score import kern_to_score, load_score, normalize, snake
 
 DEFAULT_SEGMENTATION_MODEL = "gpt-5.1"
 _SEGMENT_COMMENT_PREFIXES = ("!! SEGMENT|", "!!SEGMENT|")
+
+SEGMENTATION_TECHNIQUES = {
+    "hierarchy": (
+        "Hierarchical segmentation brief (Open Music Theory · Foundational Concepts):\n"
+        "- Map every span onto movements → sections → themes → phrases → ideas → motives.\n"
+        "- Prioritize cadential function when labeling phrases, then describe how idea- and motive-level surface activity supports those cadences.\n"
+        "- Call out formal anomalies (overlapping phrases, liquidations, expanded cadential ideas) so conductors and analysts can see how classical phrase archetypes are bent."
+    ),
+    "subject": (
+        "Subject-tracing brief (fugal subject practice per Open Music Theory, Britannica, and Elgar/Enigma scholarship):\n"
+        "- Identify the primary subject/theme (complete statement, not a fragment) including its anacrusis/pickup if present.\n"
+        "- Surround each literal or meaningfully varied subject entry with paired comments: insert `!! SUBJECT_START|label|m<start>-m<end>|variant` immediately before the barline that launches the subject, and `!! SUBJECT_END|label|m<start>-m<end>` immediately after the barline where it resolves.\n"
+        "- Describe how each occurrence differs (augmentation, inversion, stretto, octave displacement, textural shift, etc.) so later workflows can target specific versions.\n"
+        "- When subjects overlap, nest the comment pairs in chronological order and explain the contrapuntal interplay."
+    ),
+}
+
+
+def segmentation_technique_prompt(name: Optional[str]) -> str:
+    if not name:
+        return ""
+    return SEGMENTATION_TECHNIQUES.get(name, "")
 
 
 class SegmentLevel(str, Enum):
@@ -72,6 +96,13 @@ class SegmentLabel(BaseModel):
         return self
 
 
+class SegmentationMetrics(BaseModel):
+    """Numeric heuristics ensuring the annotation is internally consistent."""
+
+    segment_count: int = Field(ge=1)
+    measure_count: int = Field(ge=1)
+
+
 class SegmentationPayload(BaseModel):
     """Shared payload describing segmentation spans and annotated **kern."""
 
@@ -79,8 +110,9 @@ class SegmentationPayload(BaseModel):
     annotated_kern: str = Field(
         description="Full **kern excerpt plus segmentation !! comments"
     )
+    metrics: SegmentationMetrics
     overview: str = Field(
-        description="High-level description of phrase/idea/motive architecture"
+        description="Single-sentence high-level description of the architecture"
     )
 
     @field_validator("annotated_kern")
@@ -104,6 +136,8 @@ class SegmentationContext(BaseModel):
     spec: ScoreSpec
     kern_text: str
     excerpt_label: str
+    technique: str = "hierarchy"
+    user_instructions: Optional[str] = None
 
 
 class SegmentationResult(SegmentationPayload):
@@ -122,6 +156,7 @@ def analyze_segmentation(
     response = _call_openai(context, model=model)
     spec = context.spec
     segments = _validate_segment_ranges(response.segments, spec)
+    _validate_metrics(response.metrics, spec, len(segments))
     _ensure_suffix_uniqueness(segments)
     annotated_text = response.annotated_kern
     score = kern_to_score(annotated_text)
@@ -130,6 +165,7 @@ def analyze_segmentation(
         segments=segments,
         overview=response.overview.strip(),
         annotated_kern=annotated_text,
+        metrics=response.metrics,
         model=model,
     )
 
@@ -154,6 +190,7 @@ def _call_openai(
         Insert segmentation markers as `!! SEGMENT|suffix|name|level|m<start>-m<end>|short synopsis` immediately before the `=<number>` barline that starts each segment.
         Never alter **kern tokens or metadata beyond inserting those exact comment lines.
         Keep suffix suggestions snake_case so users can reuse them as excerpt filenames.
+        Populate the `metrics` object using actual counts derived from your annotation; if you cannot guarantee accuracy, emit no content.
         """
     ).strip()
     system_prompt = f"{system_prompt}\n\n{HUMDRUM_KERN_PRIMER}"
@@ -195,6 +232,8 @@ def _build_user_prompt(context: SegmentationContext) -> str:
     cue_lines = spec.cue_lines()
     first_measure = spec.first_measure_number()
     last_measure = spec.total_measures
+    technique_text = segmentation_technique_prompt(context.technique)
+    extra_instructions = (context.user_instructions or "").strip()
     requirements = dedent(
         f"""
         Requirements:
@@ -213,6 +252,8 @@ def _build_user_prompt(context: SegmentationContext) -> str:
         "\n".join(metadata_lines),
         "Structural cues (measure spans inclusive):",
         "\n".join(cue_lines) or "(No cues extracted)",
+        ("Technique brief:\n" + technique_text) if technique_text else "",
+        ("Additional analyst notes:\n" + extra_instructions) if extra_instructions else "",
         requirements,
         context.kern_text,
     ]
@@ -235,13 +276,13 @@ def _validate_segment_ranges(segments: Sequence[SegmentLabel], spec: ScoreSpec) 
         )
     prev_end = first_measure - 1
     for seg in ordered:
-        if seg.measure_start != prev_end + 1:
+        if seg.measure_start > prev_end + 1:
             raise ValueError(
-                f"Segment at measures {seg.measure_start}-{seg.measure_end} is not contiguous after measure {prev_end}"
+                f"Segment at measures {seg.measure_start}-{seg.measure_end} leaves a gap after measure {prev_end}"
             )
         if seg.measure_end > last_measure:
             raise ValueError("Segment exceeds excerpt length")
-        prev_end = seg.measure_end
+        prev_end = max(prev_end, seg.measure_end)
     return list(ordered)
 
 
@@ -271,6 +312,37 @@ def _assert_segment_comments(score, segments: Sequence[SegmentLabel]) -> None:
         raise ValueError(
             f"Annotated kern missing SEGMENT comments for suffixes: {formatted}"
         )
+
+
+def _validate_metrics(metrics: SegmentationMetrics, spec: ScoreSpec, segment_count: int) -> None:
+    if metrics.segment_count != segment_count:
+        raise ValueError(
+            f"Segmentation metrics mismatch: expected {segment_count} segments, got {metrics.segment_count}"
+        )
+    expected_measures = spec.total_measures
+    if metrics.measure_count != expected_measures:
+        raise ValueError(
+            f"Segmentation metrics mismatch: expected {expected_measures} measures, got {metrics.measure_count}"
+        )
+
+
+def _resolve_segmentation_technique(provided: Optional[str]) -> str:
+    if provided:
+        name = provided.strip().lower()
+        if name not in SEGMENTATION_TECHNIQUES:
+            raise typer.BadParameter(
+                f"Unknown technique '{provided}'. Choices: {', '.join(sorted(SEGMENTATION_TECHNIQUES))}"
+            )
+        return name
+    if not SEGMENTATION_TECHNIQUES:
+        return "hierarchy"
+    choices = [Choice(title=label.title(), value=label) for label in sorted(SEGMENTATION_TECHNIQUES)]
+    selected = questionary.select(
+        "Choose segmentation technique",
+        choices=choices,
+        default="hierarchy" if "hierarchy" in SEGMENTATION_TECHNIQUES else None,
+    ).unsafe_ask()
+    return selected
 
 
 def _render_segmentation_overview(overview: str) -> None:
@@ -335,6 +407,25 @@ def analyze_segmentation_cli(
             help="Excerpt filename under excerpts/ to analyze; omit for interactive chooser.",
         ),
     ] = None,
+    instructions_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--instructions-file",
+            help="Optional text file with supplemental analyst instructions.",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            resolve_path=True,
+        ),
+    ] = None,
+    technique: Annotated[
+        Optional[str],
+        typer.Option(
+            "--technique",
+            help="Segmentation technique lexicon key (default: hierarchy).",
+        ),
+    ] = None,
     model: Annotated[
         str,
         typer.Option(
@@ -360,10 +451,19 @@ def analyze_segmentation_cli(
     render_score_metadata(spec, source_label=label)
     render_measure_landmarks(spec)
 
+    analyst_notes = (
+        instructions_file.read_text(encoding="utf-8").strip()
+        if instructions_file
+        else ""
+    )
+    selected_technique = _resolve_segmentation_technique(technique)
+
     context = SegmentationContext(
         spec=spec,
         kern_text=kern_text,
         excerpt_label=candidate.stem,
+        technique=selected_technique,
+        user_instructions=analyst_notes or None,
     )
     try:
         result = analyze_segmentation(context=context, model=model)
@@ -374,6 +474,9 @@ def analyze_segmentation_cli(
     target = _write_segmentation_file(candidate, result.annotated_kern)
     _render_segmentation_overview(result.overview)
     _render_segmentation_segments(result.segments)
+    console.print(
+        f"[blue]Metrics[/blue]: measures={result.metrics.measure_count} · segments={result.metrics.segment_count}"
+    )
 
     rel = target.relative_to(work_dir)
     console.print(

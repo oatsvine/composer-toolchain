@@ -1,10 +1,11 @@
 """Typer CLI interface to core toolchain."""
 
 from __future__ import annotations
-
+import shutil
 from pathlib import Path
 from typing import Literal, Optional
 
+from rich.table import Table
 import typer
 from loguru import logger
 from music21.humdrum.spineParser import GlobalComment
@@ -28,6 +29,7 @@ from composer_toolchain.sketch import sketch_app
 
 # Refactor to use environment variable later.
 SCORES_CORPUS_DIR = Path("/data/workspace/in/mxl")
+MIDI_EXPORT_DIR = Path("/data/workspace/out/midi")
 
 app = typer.Typer()
 app.add_typer(segmentation_app)
@@ -98,7 +100,7 @@ def _interactive_source_filename(
     if not source_path.exists():
         raise typer.BadParameter(
             f"Score not found under scores/: {candidate}",
-            param_name="filename",
+            param_hint="filename",
         )
     return candidate
 
@@ -266,7 +268,7 @@ def change_master(
 
 
 @app.command()
-def export_midi(
+def render_midi(
     work_dir: Annotated[
         Path,
         typer.Argument(
@@ -276,11 +278,24 @@ def export_midi(
             resolve_path=True,
         ),
     ] = Path.cwd(),
+    export: Annotated[
+        bool,
+        typer.Option(
+            help=f"Export MIDI to {MIDI_EXPORT_DIR}.",
+            is_flag=True,
+            show_default=True,
+        ),
+    ] = False,
 ) -> Path:
     """Export the master score to MIDI."""
     workspace = Context(work_dir=work_dir)
-    midi = workspace.export_midi()
+    # Recurse the work_dir to render any excerpt, sketch, etc.
+    source_file = choose_score(work_dir, filter_suffix={".krn"})
+    midi = workspace.render_midi(source_file)
     console.print(f"[green]MIDI exported[/green]: {midi.relative_to(work_dir)}")
+    if export:
+        shutil.copy2(midi, MIDI_EXPORT_DIR / midi.name)
+        console.print(f"[green]MIDI copied[/green]: {MIDI_EXPORT_DIR / midi.name}")
     return midi
 
 
@@ -370,18 +385,18 @@ def create_excerpt(
         try:
             provided_part_ids = PartSpec(tokens=provided_parts).ids
         except ValueError as exc:
-            raise typer.BadParameter(str(exc), param_name="parts") from exc
+            raise typer.BadParameter(str(exc), param_hint="parts") from exc
 
     if non_interactive:
         if not provided_parts:
             raise typer.BadParameter(
                 "--parts is required when using --non-interactive.",
-                param_name="parts",
+                param_hint="parts",
             )
         if not provided_measures:
             raise typer.BadParameter(
                 "--measures is required when using --non-interactive.",
-                param_name="measures",
+                param_hint="measures",
             )
         parts_value = provided_parts
         measures_value = provided_measures
@@ -398,7 +413,7 @@ def create_excerpt(
                 None if source_name == master_name else source_name
             )
         except ValueError as exc:
-            raise typer.BadParameter(str(exc), param_name="filename") from exc
+            raise typer.BadParameter(str(exc), param_hint="filename") from exc
 
         label = f"scores/{source_name}"
         if source_name == master_name:
@@ -411,12 +426,12 @@ def create_excerpt(
     try:
         part_spec = PartSpec(tokens=parts_value)
     except ValueError as exc:
-        raise typer.BadParameter(str(exc), param_name="parts") from exc
+        raise typer.BadParameter(str(exc), param_hint="parts") from exc
 
     try:
         measure_spec = MeasureSpec(spec=measures_value)
     except ValueError as exc:
-        raise typer.BadParameter(str(exc), param_name="measures") from exc
+        raise typer.BadParameter(str(exc), param_hint="measures") from exc
 
     source_override = None if source_name == master_name else source_name
 

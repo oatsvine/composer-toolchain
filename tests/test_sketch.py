@@ -35,6 +35,8 @@ def test_sketch_live():
             " the chorale's B-flat major cadence profile."
         ),
         measures=4,
+        target_parts=len(spec.parts),
+        techniques=["variations"],
     )
     model = os.environ.get("SKETCH_TEST_MODEL", DEFAULT_SKETCH_MODEL)
     result = generate_sketch(context=context, model=model)
@@ -42,6 +44,8 @@ def test_sketch_live():
     assert result.title
     assert result.suffix
     assert result.commentary
+    assert result.metrics.measure_count == 4
+    assert result.metrics.part_count == len(spec.parts)
 
     sketch_score = kern_to_score(result.annotated_kern)
     comments = [

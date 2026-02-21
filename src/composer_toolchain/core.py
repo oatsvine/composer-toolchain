@@ -503,14 +503,16 @@ class Context:
         target_score.write(fmt, fp=master_file)
         return bak_file
 
-    def export_midi(self) -> Path:
+    def render_midi(self, source_path: Path) -> Path:
         """
         Convert the master score or another specified score to MIDI.
         """
-        master_file = self._master_file()
-        score = load_score(master_file)
+        assert source_path.is_relative_to(
+            self.work_dir
+        ), "Source path must be within workspace"
+        score = load_score(source_path)
         midi_dir = self.subdir("midi")
-        mid_file = midi_dir / f"{master_file.stem}.mid"
+        mid_file = midi_dir / f"{source_path.stem}.mid"
         bak = self._supersede(mid_file)
         score.write("midi", fp=mid_file)
         logger.success(

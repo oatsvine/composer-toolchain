@@ -45,10 +45,10 @@ def mozart_fragment_score(multi_movement_score_path: Path) -> Score:
 
 def test_export_midi(sample_workspace: Context) -> None:
     workspace = sample_workspace
-    midi_path = workspace.export_midi()
+    midi_path = workspace.render_midi()
     assert midi_path.exists()
 
-    workspace.export_midi()
+    workspace.render_midi()
     midi_versions = workspace.work_dir / "versions" / "midi"
     assert any(midi_versions.glob(f"{midi_path.stem}_v*.mid"))
 

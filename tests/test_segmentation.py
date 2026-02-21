@@ -145,6 +145,8 @@ def test_segmentation_live():
     result = analyze_segmentation(context=context, model=model)
 
     assert result.segments, "LLM must return at least one labeled span"
+    assert result.metrics.segment_count == len(result.segments)
+    assert result.metrics.measure_count == spec.total_measures
 
     annotated_score = kern_to_score(result.annotated_kern)
     comments = [

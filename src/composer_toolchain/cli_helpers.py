@@ -16,24 +16,21 @@ def choose_score(
     src_dir: Path, filter_suffix: Set[str] = {".mxl", ".xml", ".krn"}
 ) -> Path:
     """Prompt the user to select a score inside `src_dir` via `sk`."""
-
-    scores = [p for p in src_dir.glob("*.*") if p.suffix in filter_suffix]
-    if not scores:
-        raise ValueError(f"No files with suffix {filter_suffix} in {src_dir}")
-    choices = [candidate.name for candidate in scores]
-    try:
-        result = subprocess.run(
-            ["sk"],
-            input="\n".join(choices),
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            "sk executable not found; install sk to use interactive selection."
-        ) from exc
-
+    result = subprocess.run(
+        ["fd", "--base-directory", str(src_dir), "--type", "f"]
+        + [f"--extension={s.lstrip('.')}" for s in filter_suffix],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    choices = result.stdout.strip().splitlines()
+    result = subprocess.run(
+        ["sk"],
+        input="\n".join(choices),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
     filename = result.stdout.strip()
     if not filename:
         raise ValueError("No score selected.")
@@ -71,7 +68,9 @@ def render_score_metadata(spec, *, source_label: str) -> None:
             if entry.title:
                 label_bits.append(entry.title)
             if label_bits:
-                labels.append(": ".join(label_bits) if len(label_bits) > 1 else label_bits[0])
+                labels.append(
+                    ": ".join(label_bits) if len(label_bits) > 1 else label_bits[0]
+                )
         if labels:
             table.add_row("Movements", ", ".join(labels))
     table.add_row("Parts", str(len(spec.parts)))
