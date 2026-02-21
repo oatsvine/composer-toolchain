@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 - `src/composer_toolchain/` houses runtime code: `core.py` handles workspace orchestration, `score.py` exposes excerpt utilities, and `cli.py` provides the Typer interface surfaced via `python -m composer_toolchain.cli`.
 - `tests/` mirrors the module layout (e.g., `test_core.py`, `test_score_parts.py`) and should be extended alongside new functionality.
-- `corpus/` stores sample Humdrum and MusicXML assets used in fixtures; avoid modifying originals—stage temporary derivatives under `/tmp` or a workspace copy.
+- `tests/data/corpus/` stores sample Humdrum and MusicXML assets used in fixtures; avoid modifying originals—stage temporary derivatives under `/tmp` or a workspace copy.
 
 ## Build, Test, and Development Commands
 - `python -m pip install -e .[dev]` sets up the editable package with pytest/pyright tooling.

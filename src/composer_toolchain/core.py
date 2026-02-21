@@ -335,9 +335,13 @@ class Context:
             raise ValueError(f"File outside workspace: {src_file}") from exc
         # NOTE: Work directly with ``src_file`` so versions mirror workspace layout (d7b4d6d fix).
         archive_dir = self.subdir("versions") / relative.parent
+        archive_dir.mkdir(parents=True, exist_ok=True)
         version = self._bump(relative.parent / relative.name)
         bak_file = archive_dir / f"{src_file.stem}_v{version:04d}{src_file.suffix}"
-        src_file.rename(bak_file)
+        try:
+            src_file.rename(bak_file)
+        except FileNotFoundError:
+            return None
         return bak_file
 
     # NOTE: For all operations in the workspace, the target is always implicitely the master score by convention (no optionality or ad-hoc configuraiton).

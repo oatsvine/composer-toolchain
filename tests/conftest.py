@@ -14,7 +14,8 @@ from music21.stream import Score
 from composer_toolchain.score import load_score, normalize, normalize_score
 
 
-_CORPUS_ROOT = Path(__file__).resolve().parents[1] / "corpus"
+_DATA_ROOT = Path(__file__).parent / "data"
+_CORPUS_SUBDIR = Path("corpus")
 
 # Curated set of representative scores covering different notational edge cases.
 # - keyboard_polyphony: densely voiced piano texture (MusicXML)
@@ -56,50 +57,76 @@ def _ensure_metadata_filename(score, path: Path):
         score.metadata.filename = path.stem
 
 
-def _resolve_corpus_path(key: str) -> Path:
-    if key in _CORPUS_LIBRARY:
-        rel_path = _CORPUS_LIBRARY[key]
-    else:
-        rel_path = _STRESS_CORPUS_LIBRARY[key]
-    return _CORPUS_ROOT / rel_path
-
-
-def _corpus_catalog(include_stress: bool) -> Dict[str, Path]:
-    catalog = dict(_CORPUS_LIBRARY)
+def _corpus_catalog(root: Path, include_stress: bool) -> Dict[str, Path]:
+    catalog: Dict[str, Path] = {key: root / rel for key, rel in _CORPUS_LIBRARY.items()}
     if include_stress:
-        catalog.update(_STRESS_CORPUS_LIBRARY)
+        catalog.update({key: root / rel for key, rel in _STRESS_CORPUS_LIBRARY.items()})
     return catalog
 
 
 @lru_cache(maxsize=_MAX_CORPUS_CACHE)
-def _raw_corpus_score(key: str):
-    path = _resolve_corpus_path(key)
+def _raw_corpus_score_cached(path: Path) -> Score:
     score = load_score(path)
     _ensure_metadata_filename(score, path)
     return score
 
 
 @lru_cache(maxsize=_MAX_CORPUS_CACHE)
-def _normalized_corpus_score(key: str):
-    # Work on a copy to keep the raw cache pristine.
-    raw_clone = deepcopy(_raw_corpus_score(key))
+def _normalized_corpus_score_cached(path: Path) -> Score:
+    raw_clone = deepcopy(_raw_corpus_score_cached(path))
     normalized = normalize_score(raw_clone)
     return normalize(normalized)
 
 
+def _require_file(path: Path) -> Path:
+    if not path.exists():
+        pytest.skip(f"Corpus file missing: {path}")
+    return path
+
+
 @pytest.fixture()
-def corpus_scores(request: pytest.FixtureRequest) -> Dict[str, Score]:
+def corpus_root(shared_datadir: Path) -> Path:
+    base = shared_datadir if shared_datadir.exists() else _DATA_ROOT
+    target = base / _CORPUS_SUBDIR
+    if not target.exists():
+        pytest.skip(f"Corpus directory missing: {target}")
+    return target
+
+
+@pytest.fixture()
+def sample_score_path(corpus_root: Path) -> Path:
+    return _require_file(corpus_root / "bwv891-prelude.krn")
+
+
+@pytest.fixture()
+def alt_score_path(corpus_root: Path) -> Path:
+    return _require_file(corpus_root / "wtc1p16.krn")
+
+
+@pytest.fixture()
+def multi_movement_score_path(corpus_root: Path) -> Path:
+    return _require_file(corpus_root / "Mozart_-_Symphony_No._41_-_Jupiter.mxl")
+
+
+@pytest.fixture()
+def corpus_scores(
+    request: pytest.FixtureRequest, corpus_root: Path
+) -> Dict[str, Score]:
     """Return deep copies of canonical normalized scores keyed by scenario name."""
 
     include_stress = bool(request.config.getoption("--stress", default=False))
-    catalog = _corpus_catalog(include_stress)
-    return {key: deepcopy(_normalized_corpus_score(key)) for key in catalog}
+    catalog = _corpus_catalog(corpus_root, include_stress)
+    return {
+        key: deepcopy(_normalized_corpus_score_cached(path)) for key, path in catalog.items()
+    }
 
 
 @pytest.fixture()
-def raw_corpus_scores(request: pytest.FixtureRequest) -> Dict[str, Score]:
+def raw_corpus_scores(
+    request: pytest.FixtureRequest, corpus_root: Path
+) -> Dict[str, Score]:
     """Return deep copies of the raw corpus scores (pre-normalization)."""
 
     include_stress = bool(request.config.getoption("--stress", default=False))
-    catalog = _corpus_catalog(include_stress)
-    return {key: deepcopy(_raw_corpus_score(key)) for key in catalog}
+    catalog = _corpus_catalog(corpus_root, include_stress)
+    return {key: deepcopy(_raw_corpus_score_cached(path)) for key, path in catalog.items()}

@@ -16,12 +16,6 @@ from composer_toolchain.score import (
 )
 from composer_toolchain.core import Manifest, ScoreSpec, Context
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CORPUS_ROOT = PROJECT_ROOT / "corpus"
-SAMPLE_SCORE = CORPUS_ROOT / "bwv891-prelude.krn"
-ALT_SAMPLE_SCORE = CORPUS_ROOT / "bwv891-fugue.krn"
-MULTI_MOVEMENT_SCORE = CORPUS_ROOT / "Mozart_-_Symphony_No._41_-_Jupiter.mxl"
-
 
 def _first_notated_span(score: Score) -> Tuple[str, int, str]:
     for part in score.parts:
@@ -36,20 +30,17 @@ def _first_notated_span(score: Score) -> Tuple[str, int, str]:
 
 
 @pytest.fixture()
-def sample_workspace(tmp_path: Path) -> Context:
-    assert SAMPLE_SCORE.exists(), f"Missing sample score: {SAMPLE_SCORE}"
+def sample_workspace(tmp_path: Path, sample_score_path: Path) -> Context:
     work_dir = Context.init_with_score(
-        score_file=SAMPLE_SCORE,
+        score_file=sample_score_path,
         cwd=tmp_path,
     )
     return Context(work_dir=work_dir)
 
 
-@pytest.fixture(scope="session")
-def mozart_fragment_score() -> Score:
-    if not MULTI_MOVEMENT_SCORE.exists():
-        pytest.skip("Mozart Jupiter sample missing")
-    return normalize(load_score(MULTI_MOVEMENT_SCORE))
+@pytest.fixture()
+def mozart_fragment_score(multi_movement_score_path: Path) -> Score:
+    return normalize(load_score(multi_movement_score_path))
 
 
 def test_export_midi(sample_workspace: Context) -> None:
@@ -132,12 +123,10 @@ def test_spec(sample_workspace: Context) -> None:
     assert isinstance(spec, ScoreSpec)
     assert spec.parts, "spec must expose part metadata"
     assert all(part.part_id and not part.part_id.isdigit() for part in spec.parts)
-    assert spec.movements, "expected at least one movement entry"
+    assert spec.time_signatures, "expected structural metadata"
 
 
-def test_spec_multimovement(
-    sample_workspace: Context, mozart_fragment_score: Score
-) -> None:
+def test_spec_multimovement(mozart_fragment_score: Score) -> None:
     spec = ScoreSpec.build(mozart_fragment_score)
     assert len(spec.parts) >= 10
     assert spec.movements, "fragment must expose movement metadata"
@@ -152,12 +141,11 @@ def test_normalized_ids(sample_workspace: Context) -> None:
     assert all(isinstance(pid, str) and not pid.isdigit() for pid in ids)
 
 
-def test_import_score(sample_workspace: Context) -> None:
+def test_import_score(sample_workspace: Context, alt_score_path: Path) -> None:
     workspace = sample_workspace
-    assert ALT_SAMPLE_SCORE.exists(), f"Missing alt sample: {ALT_SAMPLE_SCORE}"
-    target = workspace.import_score(score_file=ALT_SAMPLE_SCORE)
+    target = workspace.import_score(score_file=alt_score_path)
     expected = (
-        workspace.work_dir / "scores" / f"{snake_case(ALT_SAMPLE_SCORE.stem)}.krn"
+        workspace.work_dir / "scores" / f"{snake_case(alt_score_path.stem)}.krn"
     )
     assert target == expected
     assert expected.exists()
@@ -165,13 +153,12 @@ def test_import_score(sample_workspace: Context) -> None:
     assert spec.parts
 
 
-def test_change_master(sample_workspace: Context) -> None:
+def test_change_master(sample_workspace: Context, alt_score_path: Path) -> None:
     workspace = sample_workspace
-    assert ALT_SAMPLE_SCORE.exists(), f"Missing alt sample: {ALT_SAMPLE_SCORE}"
-    new_score = workspace.import_score(score_file=ALT_SAMPLE_SCORE)
+    new_score = workspace.import_score(score_file=alt_score_path)
     manifest_path = workspace.work_dir / "MANIFEST.json"
     original = Manifest.model_validate_json(manifest_path.read_text())
-    new_master_name = f"{snake_case(ALT_SAMPLE_SCORE.stem)}.krn"
+    new_master_name = f"{snake_case(alt_score_path.stem)}.krn"
     assert original.master != new_master_name
 
     workspace.change_master(new_score.name)

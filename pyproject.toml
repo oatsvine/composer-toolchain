@@ -31,6 +31,7 @@ mcp = [
 dev = [
   "pytest",
   "pytest-asyncio",
+  "pytest-datadir",
   "black",
   "pyright",
 ]
@@ -39,6 +40,7 @@ dev = [
 dev = [
   "pytest",
   "pytest-asyncio",
+  "pytest-datadir",
   "black",
   "pyright",
 ]
